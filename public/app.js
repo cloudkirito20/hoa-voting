@@ -12,7 +12,7 @@ async function api(path, options={}){
   const headers = new Headers(options.headers||{}); if(options.body && !headers.has('content-type')) headers.set('content-type','application/json');
   if(state.csrfToken && (options.method||'GET').toUpperCase()!=='GET') headers.set('x-csrf-token',state.csrfToken);
   const r=await fetch(path,{...options,headers,credentials:'same-origin'}); let data={}; try{data=await r.json()}catch{}
-  if(r.status===401 && !path.includes('/auth/login')){ state.user=null; state.csrfToken=null; location.pathname==='/admin'?renderLogin('admin'):location.pathname==='/vote'?renderLogin('voter'):renderPortalChoice(); throw new Error('Session expired'); }
+  if(r.status===401 && !path.includes('/auth/login')){ state.user=null; state.csrfToken=null; location.pathname==='/admin'?renderLogin('admin'):renderLogin('voter'); throw new Error('Session expired'); }
   if(!r.ok) throw new Error(data.error||'Request failed'); return data;
 }
 
@@ -20,23 +20,20 @@ async function init(){
   try{ const me=await api('/api/me'); state.user=me.user; state.csrfToken=me.csrfToken; routeHome(); }
   catch{
     const bs=await fetch('/api/bootstrap-status').then(r=>r.json()).catch(()=>({needsSetup:false}));
-    if(bs.needsSetup && location.pathname==='/admin') return renderSetup();
-    if(location.pathname==='/admin') return renderLogin('admin');
-    if(location.pathname==='/vote') return renderLogin('voter');
-    renderPortalChoice(bs.needsSetup);
+    if(location.pathname==='/admin'){
+      if(bs.needsSetup) return renderSetup();
+      return renderLogin('admin');
+    }
+    // Public entry points always show the voter login. The admin portal is intentionally
+    // available only by navigating directly to /admin.
+    return renderLogin('voter');
   }
 }
-function navigate(path){ history.pushState({},'',path); init(); }
 window.addEventListener('popstate',()=>init());
 function routeHome(){
   const target=state.user?.role==='admin'?'/admin':'/vote';
   if(location.pathname!==target) history.replaceState({},'',target);
   state.user?.role==='admin'?renderAdmin():renderVoter();
-}
-function renderPortalChoice(needsSetup=false){
-  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>Choose your portal</h1><p class="sub">Administrators manage the election and reports. Registered residents use the voter portal to cast their ballot.</p><div class="grid" style="gap:10px"><button class="btn btn-primary btn-block" id="voterPortal">Voter Portal</button><button class="btn btn-secondary btn-block" id="adminPortal">Admin Portal${needsSetup?' · Setup':''}</button></div></section></div>`;
-  document.querySelector('#voterPortal').onclick=()=>navigate('/vote');
-  document.querySelector('#adminPortal').onclick=()=>navigate('/admin');
 }
 
 function renderSetup(){
@@ -48,7 +45,7 @@ function renderLogin(expectedRole=null){
   app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>${admin?'Admin Portal':'Voter Portal'}</h1><p class="sub">${admin?'Sign in with your administrator account to manage elections, voters, and reports.':'Sign in using the credentials issued by your HOA election administrator.'}</p><form id="loginForm"><div class="field"><label>Username</label><input name="username" required autocomplete="username" autocapitalize="none"></div><div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div><button class="btn btn-primary btn-block">Sign in securely</button></form><p class="tiny muted" style="margin-top:18px">Your ballot choices are stored separately from your voter registration record.</p></section></div>`;
   document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const d=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});if(expectedRole && d.user.role!==expectedRole){ state.user=d.user; state.csrfToken=d.csrfToken; await doLogout(); throw new Error(`This account belongs to the ${d.user.role} portal.`); } state.user=d.user;state.csrfToken=d.csrfToken;routeHome();}catch(err){toast(err.message,true)}};
 }
-async function doLogout(){try{await api('/api/auth/logout',{method:'POST'});}catch{} state.user=null;state.csrfToken=null;location.pathname==='/admin'?renderLogin('admin'):location.pathname==='/vote'?renderLogin('voter'):renderPortalChoice();}
+async function doLogout(){try{await api('/api/auth/logout',{method:'POST'});}catch{} state.user=null;state.csrfToken=null;location.pathname==='/admin'?renderLogin('admin'):renderLogin('voter');}
 
 function adminShell(content){
   const tabs=[['dashboard','Dashboard'],['elections','Election Setup'],['voters','Voter Registration'],['reports','Results & Reports']];

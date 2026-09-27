@@ -2,8 +2,10 @@
 
 A responsive HOA officer election website with two separate portals:
 
-- `/admin` — election setup, voter registration, candidates, results, participation, A4 printing, CSV export
-- `/vote` — voter login, ballot, review, one-time submission, receipt
+- `/` and `/vote` — direct voter login, ballot, review, one-time submission, receipt
+- `/admin` — administrator-only login, election setup, voter registration, candidates, results, participation, A4 printing, CSV export
+
+The public login does **not** display an Admin Portal button. Administrators access the admin login only by navigating directly to `/admin`.
 
 ## Architecture
 
