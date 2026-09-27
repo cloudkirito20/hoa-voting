@@ -302,9 +302,9 @@ drop trigger if exists trg_guard_candidates on public.candidates;
 create trigger trg_guard_candidates before insert or update or delete on public.candidates
 for each row execute function public.hoa_guard_candidate_changes();
 
--- Permanently delete a Draft or Closed election and all election-scoped test data.
--- Open elections must be closed first. The local setting allows the cascade to pass
--- the configuration-lock triggers without weakening normal edits.
+-- Permanently delete any election and all election-scoped data.
+-- This is intended for administrator-controlled cleanup (including test elections).
+-- The local setting allows the cascade to pass configuration-lock triggers without weakening normal edits.
 create or replace function public.hoa_delete_election(p_election_id bigint)
 returns jsonb
 language plpgsql
@@ -318,8 +318,6 @@ declare
 begin
   select * into e from public.elections where id=p_election_id;
   if not found then raise exception 'Election not found.'; end if;
-  if e.status='open' then raise exception 'An open election cannot be deleted. Close voting first.'; end if;
-
   select coalesce(array_agg(id), '{}'::bigint[]) into position_ids
   from public.positions where election_id=p_election_id;
   select coalesce(array_agg(c.id), '{}'::bigint[]) into candidate_ids

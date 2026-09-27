@@ -293,3 +293,7 @@ Official references:
 In **Admin → Election Setup**, select a Draft or Closed test election and choose **Delete election**. The admin must type the exact election title before permanent deletion is enabled. Open elections cannot be deleted; close voting first. Deletion removes the election, positions, candidates, participation records, ballots, vote totals, and election-scoped audit entries so the test run does not remain in election reports/history.
 
 If this feature is being added to an already-created Supabase project, run the updated `supabase/schema.sql` once in Supabase SQL Editor before deploying the updated Worker. The schema is written with `create or replace`/`if not exists` statements so it can be rerun safely for this update.
+
+## Deleting test elections
+
+Admin → Election Setup now shows **Delete election** for Draft, Open, and Closed elections. Deleting an Open election stops voting immediately and permanently removes that election's positions, candidates, participation rows, ballots, vote totals, and election-specific test history. Registered voter accounts are kept. The administrator must type the exact election title to confirm permanent deletion.

@@ -243,13 +243,11 @@ async function deleteElection(request, env, admin, electionId) {
   const { data: election, error } = await sb.from("elections").select("id,title,status").eq("id", electionId).maybeSingle();
   assertDb(error);
   if (!election) return json({ error: "Election not found." }, 404);
-  if (election.status === "open") return json({ error: "An open election cannot be deleted. Close voting first." }, 409);
   if (!confirmTitle || confirmTitle !== election.title) return json({ error: "Type the exact election title to confirm permanent deletion." }, 400);
 
   const { data, error: deleteError } = await sb.rpc("hoa_delete_election", { p_election_id: electionId });
   if (deleteError) {
     const msg = deleteError.message || "Unable to delete election.";
-    if (/open election/i.test(msg)) return json({ error: "An open election cannot be deleted. Close voting first." }, 409);
     assertDb(deleteError);
   }
   return json({ ok: true, deleted: data || { id: election.id, title: election.title } });
