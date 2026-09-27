@@ -95,13 +95,74 @@ async function changeStatus(id,status){const q=status==='open'?'Open voting now?
 
 async function renderVoters(){
   adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create voter accounts and track Block/Lot participation.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
-  document.querySelector('#addVoter').onclick=openAddVoter;
-  try{const e=await api('/api/admin/elections');state.elections=e.elections;document.querySelector('#voterElection').innerHTML='<option value="">No election status</option>'+e.elections.map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('');let timer;document.querySelector('#voterSearch').oninput=()=>{clearTimeout(timer);timer=setTimeout(loadVoters,200)};document.querySelector('#voterElection').onchange=loadVoters;loadVoters();}catch(err){toast(err.message,true)}
+  const addButton=document.querySelector('#addVoter');
+  if(addButton)addButton.onclick=openAddVoter;
+  try{
+    const e=await api('/api/admin/elections');
+    state.elections=e.elections;
+    const electionSelect=document.querySelector('#voterElection');
+    const searchInput=document.querySelector('#voterSearch');
+    // The admin may have navigated to a different section while the request was running.
+    if(!electionSelect||!searchInput)return;
+    electionSelect.innerHTML='<option value="">No election status</option>'+e.elections.map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('');
+    let timer;
+    searchInput.oninput=()=>{clearTimeout(timer);timer=setTimeout(loadVoters,200)};
+    electionSelect.onchange=loadVoters;
+    await loadVoters();
+  }catch(err){toast(err.message,true)}
 }
-async function loadVoters(){const q=encodeURIComponent(document.querySelector('#voterSearch')?.value||'');const eid=document.querySelector('#voterElection')?.value||'';try{const d=await api(`/api/admin/voters?search=${q}${eid?`&electionId=${eid}`:''}`);const box=document.querySelector('#voterTable');box.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Block</th><th>Lot</th><th>Username</th>${eid?'<th>Voting</th>':''}<th>Account</th><th>Actions</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td><strong>${esc(v.full_name)}</strong></td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td><code>${esc(v.username)}</code></td>${eid?`<td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td>`:''}<td><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td><div class="actions"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Reset password</button><button class="btn ${v.active?'btn-danger':'btn-secondary'} btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable':'Enable'}</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No voters found.</div>';document.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetPass(Number(b.dataset.reset)));document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleVoter(Number(b.dataset.toggle),Number(b.dataset.active)));}catch(err){toast(err.message,true)}}
-function openAddVoter(){modal(`<h2>Register voter</h2><p class="muted">The system will generate a random username and 8-character password.</p><form id="voterForm"><div class="field"><label>Full name</label><input name="fullName" required maxlength="100"></div><div class="form-grid"><div class="field"><label>Block</label><input name="block" required maxlength="40"></div><div class="field"><label>Lot</label><input name="lot" required maxlength="40"></div></div><button class="btn btn-primary btn-block" style="margin-top:14px">Generate voter account</button></form>`,()=>{document.querySelector('#voterForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const d=await api('/api/admin/voters',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});showCredentials(d.voter);loadVoters();}catch(err){toast(err.message,true)}}});}
-function showCredentials(v){const m=document.querySelector('#modalContent');m.innerHTML=`<h2>Voter account created</h2><p class="muted">Copy or print these credentials now. The password cannot be viewed again.</p><div class="credential" id="credentialCard"><strong>${esc(v.fullName)}</strong><div class="tiny muted">Block ${esc(v.block)} · Lot ${esc(v.lot)}</div><div class="credential-grid" style="margin-top:14px"><div><small>Username</small><div class="code">${esc(v.username)}</div></div><div><small>Password</small><div class="code">${esc(v.password)}</div></div></div></div><div class="actions" style="margin-top:14px"><button class="btn btn-primary" id="copyCred">Copy credentials</button><button class="btn btn-secondary" id="printCred">Print</button><button class="btn btn-ghost" id="doneCred">Done</button></div>`;document.querySelector('#copyCred').onclick=()=>navigator.clipboard.writeText(`HOA Voting Credentials\nName: ${v.fullName}\nBlock: ${v.block}\nLot: ${v.lot}\nUsername: ${v.username}\nPassword: ${v.password}`).then(()=>toast('Credentials copied.'));document.querySelector('#printCred').onclick=()=>printCredential(v);document.querySelector('#doneCred').onclick=closeModal;}
-async function resetPass(id){if(!confirm('Generate a new 8-character password? The old password will stop working.'))return;try{const d=await api(`/api/admin/voters/${id}/reset-password`,{method:'POST'});modal('',()=>showCredentials({fullName:d.fullName,block:'',lot:'',username:d.username,password:d.password}));}catch(err){toast(err.message,true)}}
+async function loadVoters(){
+  const searchInput=document.querySelector('#voterSearch');
+  const electionSelect=document.querySelector('#voterElection');
+  const box=document.querySelector('#voterTable');
+  if(!box)return;
+  const q=encodeURIComponent(searchInput?.value||'');
+  const eid=electionSelect?.value||'';
+  try{
+    const d=await api(`/api/admin/voters?search=${q}${eid?`&electionId=${eid}`:''}`);
+    // Ignore a stale response if the user left Voter Registration while it was loading.
+    const currentBox=document.querySelector('#voterTable');
+    if(!currentBox)return;
+    currentBox.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Block</th><th>Lot</th><th>Username</th>${eid?'<th>Voting</th>':''}<th>Account</th><th>Actions</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td><strong>${esc(v.full_name)}</strong></td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td><code>${esc(v.username)}</code></td>${eid?`<td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td>`:''}<td><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td><div class="actions"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Reset password</button><button class="btn ${v.active?'btn-danger':'btn-secondary'} btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable':'Enable'}</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No voters found.</div>';
+    currentBox.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetPass(Number(b.dataset.reset)));
+    currentBox.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleVoter(Number(b.dataset.toggle),Number(b.dataset.active)));
+  }catch(err){toast(err.message,true)}
+}
+function openAddVoter(){
+  modal(`<h2>Register voter</h2><p class="muted">The system will generate a random username and 8-character password.</p><form id="voterForm"><div class="field"><label>Full name</label><input name="fullName" required maxlength="100"></div><div class="form-grid"><div class="field"><label>Block</label><input name="block" required maxlength="40"></div><div class="field"><label>Lot</label><input name="lot" required maxlength="40"></div></div><button class="btn btn-primary btn-block" style="margin-top:14px">Generate voter account</button></form>`,()=>{
+    const form=document.querySelector('#voterForm');
+    if(!form)return;
+    form.onsubmit=async e=>{
+      e.preventDefault();
+      const submit=form.querySelector('button[type="submit"],button:not([type])');
+      const originalText=submit?.textContent||'Generate voter account';
+      if(submit){submit.disabled=true;submit.textContent='Creating account…'}
+      const f=new FormData(e.currentTarget);
+      try{
+        const d=await api('/api/admin/voters',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});
+        showCredentials(d.voter);
+        loadVoters();
+      }catch(err){
+        if(submit){submit.disabled=false;submit.textContent=originalText}
+        toast(err.message,true)
+      }
+    };
+  });
+}
+function credentialView(v){return `<h2>Voter account created</h2><p class="muted">Copy or print these credentials now. The password cannot be viewed again.</p><div class="credential" id="credentialCard"><strong>${esc(v.fullName)}</strong><div class="tiny muted">${v.block||v.lot?`Block ${esc(v.block||'—')} · Lot ${esc(v.lot||'—')}`:'Password reset'}</div><div class="credential-grid" style="margin-top:14px"><div><small>Username</small><div class="code">${esc(v.username)}</div></div><div><small>Password</small><div class="code">${esc(v.password)}</div></div></div></div><div class="actions" style="margin-top:14px"><button class="btn btn-primary" id="copyCred">Copy credentials</button><button class="btn btn-secondary" id="printCred">Print</button><button class="btn btn-ghost" id="doneCred">Done</button></div>`}
+function showCredentials(v){
+  // Open a fresh credential modal rather than assuming the registration modal still exists.
+  closeModal();
+  modal(credentialView(v),()=>{
+    const copy=document.querySelector('#copyCred');
+    const print=document.querySelector('#printCred');
+    const done=document.querySelector('#doneCred');
+    if(copy)copy.onclick=()=>navigator.clipboard.writeText(`HOA Voting Credentials\nName: ${v.fullName}\nBlock: ${v.block||''}\nLot: ${v.lot||''}\nUsername: ${v.username}\nPassword: ${v.password}`).then(()=>toast('Credentials copied.')).catch(()=>toast('Copy failed. Please copy the credentials manually.',true));
+    if(print)print.onclick=()=>printCredential(v);
+    if(done)done.onclick=closeModal;
+  });
+}
+async function resetPass(id){if(!confirm('Generate a new 8-character password? The old password will stop working.'))return;try{const d=await api(`/api/admin/voters/${id}/reset-password`,{method:'POST'});showCredentials({fullName:d.fullName,block:'',lot:'',username:d.username,password:d.password});}catch(err){toast(err.message,true)}}
 async function toggleVoter(id,active){try{await api(`/api/admin/voters/${id}/active`,{method:'PUT',body:JSON.stringify({active:!!active})});loadVoters()}catch(err){toast(err.message,true)}}
 function printCredential(v){const w=window.open('','_blank','width=700,height=600');w.document.write(`<!doctype html><title>Voter Credentials</title><style>@page{size:A4;margin:20mm}body{font-family:Arial;padding:20px}.card{border:2px dashed #777;padding:28px;border-radius:18px;max-width:520px}.code{font:700 24px monospace;margin:6px 0 16px}small{color:#666}</style><div class="card"><h2>HOA Voting Credentials</h2><p><strong>${esc(v.fullName)}</strong></p>${v.block||v.lot?`<p>Block ${esc(v.block)} · Lot ${esc(v.lot)}</p>`:''}<small>Username</small><div class="code">${esc(v.username)}</div><small>Password</small><div class="code">${esc(v.password)}</div><p><small>Keep these credentials private. This password will not be displayed again.</small></p></div><script>window.onload=()=>window.print()<\/script>`);w.document.close();}
 
