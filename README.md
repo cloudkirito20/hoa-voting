@@ -54,6 +54,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - Ballot review before submission
 - Final confirmation
 - One ballot per voter per election enforced in PostgreSQL
+- One active voter login session per account; a second device is blocked until the first session logs out or expires
 - Submission receipt that does not reveal selections
 
 ## Security design
@@ -212,6 +213,14 @@ Open the local URL printed by Wrangler.
 Never commit `.dev.vars`.
 
 ---
+
+## Single-device voter login
+
+For election security, voter accounts are limited to one active login session at a time. If the same voter tries to sign in from a second phone, computer, browser, or private window while the first session is still active, the second login is rejected and asks the voter to log out from the first device.
+
+The rule is enforced in both the Cloudflare Worker and PostgreSQL. The PostgreSQL trigger locks the voter account row during session creation, so simultaneous login requests cannot both succeed. Admin accounts are not restricted by this rule.
+
+If a voter closes the browser without logging out and later cannot access the original device, the session expires automatically. An administrator can also reset that voter's password, which clears the voter's active sessions.
 
 # A4 reports
 

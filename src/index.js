@@ -145,12 +145,36 @@ async function login(request, env) {
   }
 
   await sb.from("login_attempts").delete().eq("ip", ip);
+
+  // Voters may have only one active session at a time. Clean up expired sessions first,
+  // then perform a friendly pre-check. PostgreSQL also enforces this rule with a trigger
+  // so simultaneous login requests cannot bypass it.
+  const nowIso = new Date().toISOString();
+  const { error: expiryCleanupError } = await sb.from("sessions").delete().eq("user_id", user.id).lte("expires_at", nowIso);
+  assertDb(expiryCleanupError);
+  if (user.role === "voter") {
+    const { count: activeSessions, error: activeSessionError } = await sb.from("sessions")
+      .select("token_hash", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .gt("expires_at", nowIso);
+    assertDb(activeSessionError);
+    if (Number(activeSessions || 0) > 0) {
+      return json({ error: "This voter account is already signed in on another device. Please log out there first before signing in here." }, 409);
+    }
+  }
+
   const token = randomString(48);
   const tokenHash = await sha256(token);
   const csrfToken = randomString(32);
   const expiresAt = new Date(Date.now() + SESSION_SECONDS * 1000).toISOString();
   const { error: sessionError } = await sb.from("sessions").insert({ token_hash: tokenHash, user_id: user.id, csrf_token: csrfToken, expires_at: expiresAt });
-  assertDb(sessionError);
+  if (sessionError) {
+    const msg = sessionError.message || "";
+    if (user.role === "voter" && /already signed in|another device|active session/i.test(msg)) {
+      return json({ error: "This voter account is already signed in on another device. Please log out there first before signing in here." }, 409);
+    }
+    assertDb(sessionError);
+  }
 
   const headers = secureJsonHeaders();
   headers.append("set-cookie", `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_SECONDS}`);
