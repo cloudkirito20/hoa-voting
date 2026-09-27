@@ -276,7 +276,7 @@ returns trigger language plpgsql set search_path=public as $$
 declare eid bigint;
 begin
   if TG_OP = 'DELETE' then eid := OLD.election_id; else eid := NEW.election_id; end if;
-  if exists(select 1 from public.elections where id=eid and status <> 'draft') then
+  if current_setting('hoa.allow_election_delete', true) <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
     raise exception 'Positions are locked once voting opens.';
   end if;
   if TG_OP = 'DELETE' then return OLD; else return NEW; end if;
@@ -292,7 +292,7 @@ declare pid bigint; eid bigint;
 begin
   if TG_OP = 'DELETE' then pid := OLD.position_id; else pid := NEW.position_id; end if;
   select election_id into eid from public.positions where id=pid;
-  if exists(select 1 from public.elections where id=eid and status <> 'draft') then
+  if current_setting('hoa.allow_election_delete', true) <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
     raise exception 'Candidates are locked once voting opens.';
   end if;
   if TG_OP = 'DELETE' then return OLD; else return NEW; end if;
@@ -302,11 +302,52 @@ drop trigger if exists trg_guard_candidates on public.candidates;
 create trigger trg_guard_candidates before insert or update or delete on public.candidates
 for each row execute function public.hoa_guard_candidate_changes();
 
+-- Permanently delete a Draft or Closed election and all election-scoped test data.
+-- Open elections must be closed first. The local setting allows the cascade to pass
+-- the configuration-lock triggers without weakening normal edits.
+create or replace function public.hoa_delete_election(p_election_id bigint)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  e public.elections%rowtype;
+  position_ids bigint[];
+  candidate_ids bigint[];
+begin
+  select * into e from public.elections where id=p_election_id;
+  if not found then raise exception 'Election not found.'; end if;
+  if e.status='open' then raise exception 'An open election cannot be deleted. Close voting first.'; end if;
+
+  select coalesce(array_agg(id), '{}'::bigint[]) into position_ids
+  from public.positions where election_id=p_election_id;
+  select coalesce(array_agg(c.id), '{}'::bigint[]) into candidate_ids
+  from public.candidates c join public.positions p on p.id=c.position_id
+  where p.election_id=p_election_id;
+
+  -- Remove audit entries tied only to this test election so deleted test runs do not
+  -- remain in the application's election history/audit trail.
+  delete from public.audit_log
+  where (entity_type='election' and entity_id=p_election_id::text)
+     or (entity_type='position' and entity_id in (select x::text from unnest(position_ids) as t(x)))
+     or (entity_type='candidate' and entity_id in (select x::text from unnest(candidate_ids) as t(x)))
+     or details->>'electionId'=p_election_id::text;
+
+  perform set_config('hoa.allow_election_delete','on',true);
+  delete from public.elections where id=p_election_id;
+
+  return jsonb_build_object('id',e.id,'title',e.title,'status',e.status,'deleted',true);
+end;
+$$;
+
 revoke execute on function public.hoa_create_user(text,text,text,text,text,text) from public, anon, authenticated;
 revoke execute on function public.hoa_verify_login(text,text) from public, anon, authenticated;
 revoke execute on function public.hoa_reset_password(bigint,text) from public, anon, authenticated;
 revoke execute on function public.hoa_submit_ballot(bigint,bigint,uuid,text,jsonb) from public, anon, authenticated;
+revoke execute on function public.hoa_delete_election(bigint) from public, anon, authenticated;
 grant execute on function public.hoa_create_user(text,text,text,text,text,text) to service_role;
 grant execute on function public.hoa_verify_login(text,text) to service_role;
 grant execute on function public.hoa_reset_password(bigint,text) to service_role;
 grant execute on function public.hoa_submit_ballot(bigint,bigint,uuid,text,jsonb) to service_role;
+grant execute on function public.hoa_delete_election(bigint) to service_role;

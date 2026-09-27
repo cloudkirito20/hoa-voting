@@ -59,6 +59,7 @@ async function api(request, env, url) {
   if (path === "/api/admin/elections" && method === "GET") return listElections(env);
   if (path === "/api/admin/elections" && method === "POST") return createElection(request, env, auth.user);
   if (/^\/api\/admin\/elections\/\d+$/.test(path) && method === "GET") return getElection(env, Number(path.split("/").pop()));
+  if (/^\/api\/admin\/elections\/\d+$/.test(path) && method === "DELETE") return deleteElection(request, env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/elections\/\d+\/status$/.test(path) && method === "PUT") return updateElectionStatus(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/elections\/\d+\/positions$/.test(path) && method === "POST") return addPosition(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/positions\/\d+$/.test(path) && method === "DELETE") return deletePosition(env, auth.user, Number(path.split("/").pop()));
@@ -233,6 +234,25 @@ async function createElection(request, env, admin) {
   assertDb(error);
   await audit(env, admin.id, "election.create", "election", data.id, { title });
   return json({ ok: true, id: data.id }, 201);
+}
+
+async function deleteElection(request, env, admin, electionId) {
+  const sb = db(env);
+  const body = await readJson(request);
+  const confirmTitle = String(body?.confirmTitle || "").trim();
+  const { data: election, error } = await sb.from("elections").select("id,title,status").eq("id", electionId).maybeSingle();
+  assertDb(error);
+  if (!election) return json({ error: "Election not found." }, 404);
+  if (election.status === "open") return json({ error: "An open election cannot be deleted. Close voting first." }, 409);
+  if (!confirmTitle || confirmTitle !== election.title) return json({ error: "Type the exact election title to confirm permanent deletion." }, 400);
+
+  const { data, error: deleteError } = await sb.rpc("hoa_delete_election", { p_election_id: electionId });
+  if (deleteError) {
+    const msg = deleteError.message || "Unable to delete election.";
+    if (/open election/i.test(msg)) return json({ error: "An open election cannot be deleted. Close voting first." }, 409);
+    assertDb(deleteError);
+  }
+  return json({ ok: true, deleted: data || { id: election.id, title: election.title } });
 }
 
 async function getElection(env, electionId) {

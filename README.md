@@ -23,6 +23,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - First-time administrator setup protected by a private `SETUP_TOKEN`
 - Create elections
 - Draft → Open → Closed election lifecycle
+- Permanently delete Draft/Closed test elections and all related test ballots/results (Open elections must be closed first)
 - Only one election can be open at a time
 - Add positions
 - Configure how many seats/selections each position allows
@@ -286,3 +287,9 @@ Official references:
 - https://supabase.com/docs/guides/getting-started/api-keys
 - https://supabase.com/docs/guides/api/creating-routes
 - https://developers.cloudflare.com/workers/platform/limits/
+
+## Deleting a test election
+
+In **Admin → Election Setup**, select a Draft or Closed test election and choose **Delete election**. The admin must type the exact election title before permanent deletion is enabled. Open elections cannot be deleted; close voting first. Deletion removes the election, positions, candidates, participation records, ballots, vote totals, and election-scoped audit entries so the test run does not remain in election reports/history.
+
+If this feature is being added to an already-created Supabase project, run the updated `supabase/schema.sql` once in Supabase SQL Editor before deploying the updated Worker. The schema is written with `create or replace`/`if not exists` statements so it can be rerun safely for this update.

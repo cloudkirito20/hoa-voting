@@ -30,3 +30,5 @@ button,input,textarea,select{font:inherit} button{cursor:pointer} a{color:inheri
 
 .auth-card .brand{margin-bottom:12px}.topbar .brand-logo{width:48px;height:48px}.sidebar{overflow:hidden}
 @media(max-width:600px){.brand-logo{width:50px;height:50px}.brand-title{font-size:16px}.brand-subtitle{font-size:11px}.topbar .brand-logo{width:42px;height:42px}}
+
+.danger-note{border:1px solid #f2b8b5;background:#fff4f3;color:#7a271a;border-radius:14px;padding:14px 16px;margin:14px 0}.danger-note p{margin:6px 0 0;color:#912018;line-height:1.45}.confirm-title{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-weight:800;word-break:break-word}.btn:disabled{opacity:.55;cursor:not-allowed;transform:none!important}

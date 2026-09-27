@@ -80,8 +80,8 @@ function drawElectionList(){
 }
 async function loadElectionDetail(){
   if(!state.selectedElectionId)return; const box=document.querySelector('#electionDetail');if(!box)return;box.innerHTML='Loading…';
-  try{const d=await api(`/api/admin/elections/${state.selectedElectionId}`);const e=d.election;box.innerHTML=`<div class="section-title"><div><h2>${esc(e.title)}</h2><span class="badge badge-${e.status}">${e.status}</span></div><div class="actions">${e.status==='draft'?'<button class="btn btn-primary btn-sm" id="openVote">Open voting</button>':''}${e.status==='open'?'<button class="btn btn-danger btn-sm" id="closeVote">Close voting</button>':''}</div></div><p class="muted">${esc(e.description||'No description')}</p>${e.status!=='draft'?'<p class="tiny muted">Ballot configuration is locked because voting has started.</p>':''}<div class="divider"></div><div class="section-title"><h2>Positions</h2>${e.status==='draft'?'<button class="btn btn-secondary btn-sm" id="addPos">+ Position</button>':''}</div>${d.positions.length?d.positions.map(p=>positionCard(p,e.status)).join(''):'<div class="empty">No positions yet.</div>'}`;
-    document.querySelector('#addPos')?.addEventListener('click',()=>openAddPosition(e.id));document.querySelector('#openVote')?.addEventListener('click',()=>changeStatus(e.id,'open'));document.querySelector('#closeVote')?.addEventListener('click',()=>changeStatus(e.id,'closed'));
+  try{const d=await api(`/api/admin/elections/${state.selectedElectionId}`);const e=d.election;box.innerHTML=`<div class="section-title"><div><h2>${esc(e.title)}</h2><span class="badge badge-${e.status}">${e.status}</span></div><div class="actions">${e.status==='draft'?'<button class="btn btn-primary btn-sm" id="openVote">Open voting</button>':''}${e.status==='open'?'<button class="btn btn-danger btn-sm" id="closeVote">Close voting</button>':''}${e.status!=='open'?'<button class="btn btn-danger btn-sm" id="deleteElection">Delete election</button>':''}</div></div><p class="muted">${esc(e.description||'No description')}</p>${e.status!=='draft'?'<p class="tiny muted">Ballot configuration is locked because voting has started.</p>':''}<div class="divider"></div><div class="section-title"><h2>Positions</h2>${e.status==='draft'?'<button class="btn btn-secondary btn-sm" id="addPos">+ Position</button>':''}</div>${d.positions.length?d.positions.map(p=>positionCard(p,e.status)).join(''):'<div class="empty">No positions yet.</div>'}`;
+    document.querySelector('#addPos')?.addEventListener('click',()=>openAddPosition(e.id));document.querySelector('#openVote')?.addEventListener('click',()=>changeStatus(e.id,'open'));document.querySelector('#closeVote')?.addEventListener('click',()=>changeStatus(e.id,'closed'));document.querySelector('#deleteElection')?.addEventListener('click',()=>openDeleteElection(e));
     document.querySelectorAll('[data-addcand]').forEach(b=>b.onclick=()=>openAddCandidate(Number(b.dataset.addcand)));document.querySelectorAll('[data-delpos]').forEach(b=>b.onclick=()=>removePosition(Number(b.dataset.delpos)));document.querySelectorAll('[data-delcand]').forEach(b=>b.onclick=()=>removeCandidate(Number(b.dataset.delcand)));
   }catch(err){box.innerHTML=`<div class="empty">${esc(err.message)}</div>`}
 }
@@ -92,6 +92,23 @@ function openAddCandidate(pid){modal(`<h2>Add candidate</h2><form id="candForm">
 async function removePosition(id){if(!confirm('Delete this position and its candidates?'))return;try{await api(`/api/admin/positions/${id}`,{method:'DELETE'});loadElectionDetail()}catch(err){toast(err.message,true)}}
 async function removeCandidate(id){if(!confirm('Remove this candidate?'))return;try{await api(`/api/admin/candidates/${id}`,{method:'DELETE'});loadElectionDetail()}catch(err){toast(err.message,true)}}
 async function changeStatus(id,status){const q=status==='open'?'Open voting now? Positions and candidates will be locked.':'Close voting? No more ballots will be accepted and this cannot be reopened.';if(!confirm(q))return;try{await api(`/api/admin/elections/${id}/status`,{method:'PUT',body:JSON.stringify({status})});toast(`Election ${status}.`);renderElections()}catch(err){toast(err.message,true)}}
+function openDeleteElection(election){
+  const title=String(election.title||'');
+  modal(`<h2>Delete election permanently?</h2><div class="danger-note"><strong>This cannot be undone.</strong><p>Deleting this election removes its positions, candidates, participation records, ballots, vote totals, and test results. It will no longer appear in reports.</p></div><p class="muted">To confirm, type the exact election title:</p><div class="confirm-title">${esc(title)}</div><div class="field"><label>Election title</label><input id="deleteElectionTitle" autocomplete="off" spellcheck="false"></div><button class="btn btn-danger btn-block" id="confirmDeleteElection" disabled>Delete election permanently</button>`,()=>{
+    const input=document.querySelector('#deleteElectionTitle');
+    const button=document.querySelector('#confirmDeleteElection');
+    input.oninput=()=>{button.disabled=input.value!==title};
+    button.onclick=async()=>{
+      if(input.value!==title)return;
+      button.disabled=true;button.textContent='Deleting…';
+      try{
+        await api(`/api/admin/elections/${election.id}`,{method:'DELETE',body:JSON.stringify({confirmTitle:title})});
+        closeModal();state.selectedElectionId=null;toast('Election and its test data were permanently deleted.');renderElections();
+      }catch(err){button.disabled=false;button.textContent='Delete election permanently';toast(err.message,true)}
+    };
+    input.focus();
+  });
+}
 
 async function renderVoters(){
   adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create voter accounts and track Block/Lot participation.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
