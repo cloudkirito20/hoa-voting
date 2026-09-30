@@ -73,6 +73,7 @@ async function api(request, env, url) {
 
   if (path === "/api/admin/voters" && method === "GET") return listVoters(env, url);
   if (path === "/api/admin/voters" && method === "POST") return createVoter(request, env, auth.user);
+  if (/^\/api\/admin\/voters\/\d+$/.test(path) && method === "DELETE") return deleteVoter(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/voters\/\d+\/reset-password$/.test(path) && method === "POST") return resetVoterPassword(env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/voters\/\d+\/active$/.test(path) && method === "PUT") return toggleVoter(request, env, auth.user, Number(path.split("/")[4]));
 
@@ -583,6 +584,48 @@ async function createVoter(request, env, admin) {
   }
   await audit(env, admin.id, "voter.create", "user", id, { username, fullName, block, lot });
   return json({ ok: true, voter: { id, username, password, fullName, block, lot } }, 201);
+}
+
+async function deleteVoter(env, admin, voterId) {
+  const sb = db(env);
+  const { data: voter, error } = await sb.from("users")
+    .select("id,username,full_name,block,lot")
+    .eq("id", voterId)
+    .eq("role", "voter")
+    .maybeSingle();
+  assertDb(error);
+  if (!voter) return json({ error: "Voter not found." }, 404);
+
+  // Once a voter has participated, keep the identity/participation record intact so
+  // turnout history cannot be altered and the same resident cannot be recreated to vote again.
+  const { count: participationCount, error: participationError } = await sb.from("voter_participation")
+    .select("user_id", { count: "exact", head: true })
+    .eq("user_id", voterId);
+  assertDb(participationError);
+  if (Number(participationCount || 0) > 0) {
+    return json({
+      error: "This voter has voting history and cannot be permanently deleted. Disable the account instead to preserve election records."
+    }, 409);
+  }
+
+  const { error: deleteError } = await sb.from("users").delete().eq("id", voterId).eq("role", "voter");
+  if (deleteError) {
+    const msg = String(deleteError.message || "");
+    if (deleteError.code === "23503" || /foreign key|voter_participation/i.test(msg)) {
+      return json({
+        error: "This voter has voting history and cannot be permanently deleted. Disable the account instead to preserve election records."
+      }, 409);
+    }
+    assertDb(deleteError);
+  }
+
+  await audit(env, admin.id, "voter.delete", "user", voterId, {
+    username: voter.username,
+    fullName: voter.full_name,
+    block: voter.block,
+    lot: voter.lot
+  });
+  return json({ ok: true });
 }
 
 async function resetVoterPassword(env, admin, voterId) {

@@ -39,6 +39,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - Print/copy newly generated voter credentials
 - Reset voter passwords to a new random 8-character password
 - Enable/disable voter accounts
+- Permanently delete voter accounts that have no voting history; voters who have participated in an election must be disabled instead so turnout and participation records remain intact
 - Search voters by name, username, block or lot
 - See Voted / Not Voted status
 - Election results with vote totals, percentages and turnout

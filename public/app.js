@@ -134,7 +134,7 @@ function openDeleteElection(election){
 }
 
 async function renderVoters(){
-  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create voter accounts and track Block/Lot participation.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
+  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
   const addButton=document.querySelector('#addVoter');
   if(addButton)addButton.onclick=openAddVoter;
   try{
@@ -163,9 +163,13 @@ async function loadVoters(){
     // Ignore a stale response if the user left Voter Registration while it was loading.
     const currentBox=document.querySelector('#voterTable');
     if(!currentBox)return;
-    currentBox.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Block</th><th>Lot</th><th>Username</th>${eid?'<th>Voting</th>':''}<th>Account</th><th>Actions</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td><strong>${esc(v.full_name)}</strong></td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td><code>${esc(v.username)}</code></td>${eid?`<td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td>`:''}<td><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td><div class="actions"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Reset password</button><button class="btn ${v.active?'btn-danger':'btn-secondary'} btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable':'Enable'}</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No voters found.</div>';
+    currentBox.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Block</th><th>Lot</th><th>Username</th>${eid?'<th>Voting</th>':''}<th>Account</th><th>Actions</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td><strong>${esc(v.full_name)}</strong></td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td><code>${esc(v.username)}</code></td>${eid?`<td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td>`:''}<td><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td><div class="actions"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Reset password</button><button class="btn ${v.active?'btn-danger':'btn-secondary'} btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable':'Enable'}</button><button class="btn btn-danger btn-sm" data-delete-voter="${v.id}">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No voters found.</div>';
     currentBox.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetPass(Number(b.dataset.reset)));
     currentBox.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleVoter(Number(b.dataset.toggle),Number(b.dataset.active)));
+    currentBox.querySelectorAll('[data-delete-voter]').forEach(b=>{
+      const voter=d.voters.find(v=>Number(v.id)===Number(b.dataset.deleteVoter));
+      b.onclick=()=>openDeleteVoter(voter);
+    });
   }catch(err){toast(err.message,true)}
 }
 function openAddVoter(){
@@ -204,6 +208,24 @@ function showCredentials(v){
 }
 async function resetPass(id){if(!confirm('Generate a new 8-character password? The old password will stop working.'))return;try{const d=await api(`/api/admin/voters/${id}/reset-password`,{method:'POST'});showCredentials({fullName:d.fullName,block:'',lot:'',username:d.username,password:d.password});}catch(err){toast(err.message,true)}}
 async function toggleVoter(id,active){try{await api(`/api/admin/voters/${id}/active`,{method:'PUT',body:JSON.stringify({active:!!active})});loadVoters()}catch(err){toast(err.message,true)}}
+function openDeleteVoter(voter){
+  if(!voter)return;
+  const username=String(voter.username||'');
+  modal(`<h2>Delete voter permanently?</h2><div class="danger-note"><strong>This cannot be undone.</strong><p>This permanently removes the voter account and immediately ends any active login session.</p><p><strong>Election protection:</strong> if this voter has already voted in any election, permanent deletion will be blocked. Use <em>Disable</em> instead so turnout and participation records remain intact.</p></div><p class="muted">To confirm deletion of <strong>${esc(voter.full_name)}</strong>, type the exact username:</p><div class="confirm-title">${esc(username)}</div><div class="field"><label>Voter username</label><input id="deleteVoterUsername" autocomplete="off" spellcheck="false"></div><button class="btn btn-danger btn-block" id="confirmDeleteVoter" disabled>Delete voter permanently</button>`,()=>{
+    const input=document.querySelector('#deleteVoterUsername');
+    const button=document.querySelector('#confirmDeleteVoter');
+    input.oninput=()=>{button.disabled=input.value!==username};
+    button.onclick=async()=>{
+      if(input.value!==username)return;
+      button.disabled=true;button.textContent='Deleting…';
+      try{
+        await api(`/api/admin/voters/${Number(voter.id)}`,{method:'DELETE'});
+        closeModal();toast('Voter account permanently deleted.');loadVoters();
+      }catch(err){button.disabled=false;button.textContent='Delete voter permanently';toast(err.message,true)}
+    };
+    input.focus();
+  });
+}
 function printCredential(v){const w=window.open('','_blank','width=700,height=600');w.document.write(`<!doctype html><title>Voter Credentials</title><style>@page{size:A4;margin:20mm}body{font-family:Arial;padding:20px}.card{border:2px dashed #777;padding:28px;border-radius:18px;max-width:520px}.code{font:700 24px monospace;margin:6px 0 16px}small{color:#666}</style><div class="card"><h2>HOA Voting Credentials</h2><p><strong>${esc(v.fullName)}</strong></p>${v.block||v.lot?`<p>Block ${esc(v.block)} · Lot ${esc(v.lot)}</p>`:''}<small>Username</small><div class="code">${esc(v.username)}</div><small>Password</small><div class="code">${esc(v.password)}</div><p><small>Keep these credentials private. This password will not be displayed again.</small></p></div><script>window.onload=()=>window.print()<\/script>`);w.document.close();}
 
 async function renderReports(){
