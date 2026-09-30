@@ -23,11 +23,12 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - First-time administrator setup protected by a private `SETUP_TOKEN`
 - Create elections
 - Draft → Open → Closed election lifecycle
-- Permanently delete Draft/Closed test elections and all related test ballots/results (Open elections must be closed first)
+- Permanently delete Draft/Open/Closed test elections and all related test ballots/results after typing the exact election title
 - Only one election can be open at a time
 - Add positions
 - Configure how many seats/selections each position allows
 - Add/remove candidates while the election is still Draft
+- Upload/change/remove candidate photos while the election is Draft; photos are shown on the voter ballot and ballot review screen
 - Candidate and position configuration is database-locked after voting opens
 - Register voters with:
   - Full name
@@ -49,7 +50,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 
 - Username/password login
 - Mobile and desktop responsive ballot
-- Candidates grouped by position
+- Candidates grouped by position with candidate photos for identity verification
 - Enforces the configured maximum selections per position
 - Ballot review before submission
 - Final confirmation
@@ -101,6 +102,27 @@ Copy the entire contents of:
 Run it once.
 
 This creates the tables, indexes, RLS configuration, password functions, ballot transaction, and election configuration locks.
+
+## Existing installation update: deleting an OPEN election
+
+If this project was deployed before the open-election deletion update, the Cloudflare Worker may be newer than the PostgreSQL function already installed in Supabase. In that case, deleting an OPEN election can show an error even though the confirmation dialog allows it.
+
+Open **Supabase Dashboard → SQL Editor → New query**, copy the contents of:
+
+`supabase/fix-open-election-delete.sql`
+
+and run it once. This updates only the database guard/delete functions and does not delete any election or voter data by itself.
+
+## Existing installation update: candidate photos
+
+For an existing Supabase project, run this migration once before deploying the candidate-photo version of the Worker:
+
+`supabase/add-candidate-photos.sql`
+
+It adds the `candidates.photo_path` column and creates a private Supabase Storage bucket named `candidate-photos`. Existing candidates, ballots, voters, and election results are not changed.
+
+Candidate photos support **JPEG, PNG, and WebP** files up to **5 MB**. The browser never receives a Supabase key or a direct storage URL; the authenticated Cloudflare Worker serves the images from the private bucket.
+
 
 ## 3. Install project dependencies
 
@@ -180,7 +202,7 @@ Recommended order:
 1. Create the election.
 2. Add every officer position.
 3. Enter the number of seats/selections for each position.
-4. Add all candidates.
+4. Add all candidates and upload a clear photo for each candidate.
 5. Register voters with Name, Block and Lot.
 6. Print/distribute generated voter credentials privately.
 7. Test with sample accounts.
@@ -284,7 +306,9 @@ hoa-voting-cloudflare-supabase/
 ├── src/
 │   └── index.js
 └── supabase/
-    └── schema.sql
+    ├── schema.sql
+    ├── fix-open-election-delete.sql
+    └── add-candidate-photos.sql
 ```
 
 ## Current Supabase key guidance
@@ -299,7 +323,7 @@ Official references:
 
 ## Deleting a test election
 
-In **Admin → Election Setup**, select a Draft or Closed test election and choose **Delete election**. The admin must type the exact election title before permanent deletion is enabled. Open elections cannot be deleted; close voting first. Deletion removes the election, positions, candidates, participation records, ballots, vote totals, and election-scoped audit entries so the test run does not remain in election reports/history.
+In **Admin → Election Setup**, select a Draft, Open, or Closed test election and choose **Delete election**. The admin must type the exact election title before permanent deletion is enabled. Deletion removes the election, positions, candidates, participation records, ballots, vote totals, and election-scoped audit entries so the test run does not remain in election reports/history.
 
 If this feature is being added to an already-created Supabase project, run the updated `supabase/schema.sql` once in Supabase SQL Editor before deploying the updated Worker. The schema is written with `create or replace`/`if not exists` statements so it can be rerun safely for this update.
 

@@ -125,11 +125,31 @@ create table if not exists public.candidates (
   position_id bigint not null references public.positions(id) on delete cascade,
   full_name text not null,
   statement text,
+  photo_path text,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   unique(position_id,full_name)
 );
+-- Safe migration for projects created before candidate photos were added.
+alter table public.candidates add column if not exists photo_path text;
 create index if not exists idx_candidates_position on public.candidates(position_id,sort_order);
+
+-- Candidate images are kept in a private Storage bucket. Only the Cloudflare Worker
+-- uses the Supabase secret key to upload/download these files; browsers never receive
+-- a Supabase key or a direct storage URL.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'candidate-photos',
+  'candidate-photos',
+  false,
+  5242880,
+  array['image/jpeg','image/png','image/webp']::text[]
+)
+on conflict (id) do update set
+  name = excluded.name,
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 -- Identity is deliberately stored separately from anonymous ballot choices.
 create table if not exists public.voter_participation (
@@ -333,7 +353,7 @@ returns trigger language plpgsql set search_path=public as $$
 declare eid bigint;
 begin
   if TG_OP = 'DELETE' then eid := OLD.election_id; else eid := NEW.election_id; end if;
-  if current_setting('hoa.allow_election_delete', true) <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
+  if coalesce(current_setting('hoa.allow_election_delete', true), '') <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
     raise exception 'Positions are locked once voting opens.';
   end if;
   if TG_OP = 'DELETE' then return OLD; else return NEW; end if;
@@ -349,7 +369,7 @@ declare pid bigint; eid bigint;
 begin
   if TG_OP = 'DELETE' then pid := OLD.position_id; else pid := NEW.position_id; end if;
   select election_id into eid from public.positions where id=pid;
-  if current_setting('hoa.allow_election_delete', true) <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
+  if coalesce(current_setting('hoa.allow_election_delete', true), '') <> 'on' and exists(select 1 from public.elections where id=eid and status <> 'draft') then
     raise exception 'Candidates are locked once voting opens.';
   end if;
   if TG_OP = 'DELETE' then return OLD; else return NEW; end if;

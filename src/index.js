@@ -3,6 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 const enc = new TextEncoder();
 const SESSION_COOKIE = "hoa_session";
 const SESSION_SECONDS = 12 * 60 * 60;
+const CANDIDATE_PHOTO_BUCKET = "candidate-photos";
+const MAX_CANDIDATE_PHOTO_BYTES = 5 * 1024 * 1024;
 
 export default {
   async fetch(request, env) {
@@ -52,6 +54,7 @@ async function api(request, env, url) {
 
   if (path === "/api/voter/ballot" && method === "GET") return voterBallot(env, auth.user);
   if (path === "/api/voter/vote" && method === "POST") return submitVote(request, env, auth.user);
+  if (/^\/api\/candidates\/\d+\/photo$/.test(path) && method === "GET") return candidatePhoto(env, Number(path.split("/")[3]));
 
   if (auth.user.role !== "admin") return json({ error: "Administrator access required." }, 403);
 
@@ -64,6 +67,8 @@ async function api(request, env, url) {
   if (/^\/api\/admin\/elections\/\d+\/positions$/.test(path) && method === "POST") return addPosition(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/positions\/\d+$/.test(path) && method === "DELETE") return deletePosition(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/positions\/\d+\/candidates$/.test(path) && method === "POST") return addCandidate(request, env, auth.user, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/candidates\/\d+\/photo$/.test(path) && method === "PUT") return updateCandidatePhoto(request, env, auth.user, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/candidates\/\d+\/photo$/.test(path) && method === "DELETE") return removeCandidatePhoto(env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/candidates\/\d+$/.test(path) && method === "DELETE") return deleteCandidate(env, auth.user, Number(path.split("/").pop()));
 
   if (path === "/api/admin/voters" && method === "GET") return listVoters(env, url);
@@ -269,11 +274,21 @@ async function deleteElection(request, env, admin, electionId) {
   if (!election) return json({ error: "Election not found." }, 404);
   if (!confirmTitle || confirmTitle !== election.title) return json({ error: "Type the exact election title to confirm permanent deletion." }, 400);
 
+  const photoPaths = await electionCandidatePhotoPaths(sb, electionId);
   const { data, error: deleteError } = await sb.rpc("hoa_delete_election", { p_election_id: electionId });
   if (deleteError) {
     const msg = deleteError.message || "Unable to delete election.";
+    // Older Supabase deployments still contain the first version of
+    // hoa_delete_election(), which rejected OPEN elections. The web app now
+    // intentionally supports a confirmed permanent delete for Draft, Open,
+    // and Closed elections, so return a useful migration message instead of
+    // the generic 500 error when the Worker and database are out of sync.
+    if (/open election cannot be deleted|close voting first|positions are locked once voting opens|candidates are locked once voting opens/i.test(msg)) {
+      return json({ error: "Supabase needs the open-election delete update. Run supabase/fix-open-election-delete.sql in the Supabase SQL Editor, then try again." }, 409);
+    }
     assertDb(deleteError);
   }
+  await removeCandidatePhotoObjects(sb, photoPaths);
   return json({ ok: true, deleted: data || { id: election.id, title: election.title } });
 }
 
@@ -289,7 +304,7 @@ async function getElection(env, electionId) {
   let candidates = [];
   if (positionIds.length) {
     const r = await sb.from("candidates").select("*").in("position_id", positionIds).order("sort_order").order("id");
-    assertDb(r.error); candidates = r.data || [];
+    assertDb(r.error); candidates = (r.data || []).map(publicCandidate);
   }
   for (const p of positions || []) p.candidates = candidates.filter(c => Number(c.position_id) === Number(p.id));
   return json({ election, positions: positions || [] });
@@ -360,8 +375,12 @@ async function deletePosition(env, admin, positionId) {
   assertDb(error);
   if (!p) return json({ error: "Position not found." }, 404);
   if (!(await electionIsDraft(env, p.election_id))) return json({ error: "Positions are locked once voting opens." }, 409);
+  const { data: photoRows, error: photoError } = await sb.from("candidates").select("photo_path").eq("position_id", positionId);
+  if (photoError && !candidatePhotoSchemaMissing(photoError)) assertDb(photoError);
+  const photoPaths = (photoRows || []).map(c => c.photo_path).filter(Boolean);
   const r = await sb.from("positions").delete().eq("id", positionId);
   if (r.error) return dbConflict(r.error);
+  await removeCandidatePhotoObjects(sb, photoPaths);
   await audit(env, admin.id, "position.delete", "position", positionId, { title: p.title });
   return json({ ok: true });
 }
@@ -372,10 +391,19 @@ async function addCandidate(request, env, admin, positionId) {
   assertDb(error);
   if (!p) return json({ error: "Position not found." }, 404);
   if (!(await electionIsDraft(env, p.election_id))) return json({ error: "Candidates are locked once voting opens." }, 409);
-  const body = await readJson(request);
-  const fullName = clean(body?.fullName, 100);
-  const statement = clean(body?.statement, 400);
+
+  const input = await readCandidateForm(request);
+  const fullName = clean(input.fullName, 100);
+  const statement = clean(input.statement, 400);
+  const photo = input.photo;
   if (!fullName) return json({ error: "Candidate name is required." }, 400);
+
+  let preparedPhoto = null;
+  if (isUploadedFile(photo) && photo.size > 0) {
+    try { preparedPhoto = await prepareCandidatePhoto(photo); }
+    catch (error) { return json({ error: error.message }, 400); }
+  }
+
   const { data: existing, error: orderError } = await sb.from("candidates").select("sort_order").eq("position_id", positionId).order("sort_order", { ascending: false }).limit(1);
   assertDb(orderError);
   const sortOrder = Number(existing?.[0]?.sort_order || 0) + 1;
@@ -384,22 +412,125 @@ async function addCandidate(request, env, admin, positionId) {
     if (isUnique(insertError)) return json({ error: "That candidate is already listed for this position." }, 409);
     return dbConflict(insertError);
   }
-  await audit(env, admin.id, "candidate.create", "candidate", data.id, { positionId, fullName });
-  return json({ ok: true, id: data.id }, 201);
+
+  let photoPath = null;
+  if (preparedPhoto) {
+    const uploaded = await uploadCandidatePhotoObject(sb, data.id, preparedPhoto);
+    if (uploaded.error) {
+      await sb.from("candidates").delete().eq("id", data.id);
+      return candidatePhotoConfigError(uploaded.error);
+    }
+    photoPath = uploaded.path;
+    const { error: photoUpdateError } = await sb.from("candidates").update({ photo_path: photoPath }).eq("id", data.id);
+    if (photoUpdateError) {
+      await removeCandidatePhotoObjects(sb, [photoPath]);
+      await sb.from("candidates").delete().eq("id", data.id);
+      if (candidatePhotoSchemaMissing(photoUpdateError)) return candidatePhotoConfigError(photoUpdateError);
+      return dbConflict(photoUpdateError);
+    }
+  }
+
+  await audit(env, admin.id, "candidate.create", "candidate", data.id, { positionId, fullName, hasPhoto: Boolean(photoPath) });
+  return json({ ok: true, id: data.id, hasPhoto: Boolean(photoPath) }, 201);
+}
+
+async function updateCandidatePhoto(request, env, admin, candidateId) {
+  const sb = db(env);
+  const candidate = await getCandidateForPhotoChange(sb, candidateId);
+  if (candidate.response) return candidate.response;
+  if (!(await electionIsDraft(env, candidate.electionId))) return json({ error: "Candidate photos are locked once voting opens." }, 409);
+
+  let form;
+  try { form = await request.formData(); }
+  catch { return json({ error: "Choose a JPEG, PNG, or WebP photo to upload." }, 400); }
+  const photo = form.get("photo");
+  if (!isUploadedFile(photo) || photo.size < 1) return json({ error: "Choose a candidate photo to upload." }, 400);
+
+  let prepared;
+  try { prepared = await prepareCandidatePhoto(photo); }
+  catch (error) { return json({ error: error.message }, 400); }
+
+  const uploaded = await uploadCandidatePhotoObject(sb, candidateId, prepared);
+  if (uploaded.error) return candidatePhotoConfigError(uploaded.error);
+  const { error: updateError } = await sb.from("candidates").update({ photo_path: uploaded.path }).eq("id", candidateId);
+  if (updateError) {
+    await removeCandidatePhotoObjects(sb, [uploaded.path]);
+    if (candidatePhotoSchemaMissing(updateError)) return candidatePhotoConfigError(updateError);
+    return dbConflict(updateError);
+  }
+  await removeCandidatePhotoObjects(sb, [candidate.photoPath]);
+  await audit(env, admin.id, "candidate.photo_update", "candidate", candidateId, { fullName: candidate.fullName });
+  return json({ ok: true, hasPhoto: true });
+}
+
+async function removeCandidatePhoto(env, admin, candidateId) {
+  const sb = db(env);
+  const candidate = await getCandidateForPhotoChange(sb, candidateId);
+  if (candidate.response) return candidate.response;
+  if (!(await electionIsDraft(env, candidate.electionId))) return json({ error: "Candidate photos are locked once voting opens." }, 409);
+  if (!candidate.photoPath) return json({ ok: true, hasPhoto: false });
+
+  const { error: updateError } = await sb.from("candidates").update({ photo_path: null }).eq("id", candidateId);
+  if (updateError) {
+    if (candidatePhotoSchemaMissing(updateError)) return candidatePhotoConfigError(updateError);
+    return dbConflict(updateError);
+  }
+  await removeCandidatePhotoObjects(sb, [candidate.photoPath]);
+  await audit(env, admin.id, "candidate.photo_remove", "candidate", candidateId, { fullName: candidate.fullName });
+  return json({ ok: true, hasPhoto: false });
 }
 
 async function deleteCandidate(env, admin, candidateId) {
   const sb = db(env);
-  const { data: c, error } = await sb.from("candidates").select("id,full_name,position_id").eq("id", candidateId).maybeSingle();
-  assertDb(error);
+  const { data: c, error } = await sb.from("candidates").select("id,full_name,position_id,photo_path").eq("id", candidateId).maybeSingle();
+  if (error) {
+    if (candidatePhotoSchemaMissing(error)) {
+      const fallback = await sb.from("candidates").select("id,full_name,position_id").eq("id", candidateId).maybeSingle();
+      assertDb(fallback.error);
+      if (!fallback.data) return json({ error: "Candidate not found." }, 404);
+      return deleteCandidateWithoutPhotoColumn(env, admin, fallback.data);
+    }
+    assertDb(error);
+  }
   if (!c) return json({ error: "Candidate not found." }, 404);
   const { data: p, error: pError } = await sb.from("positions").select("election_id").eq("id", c.position_id).single();
   assertDb(pError);
   if (!(await electionIsDraft(env, p.election_id))) return json({ error: "Candidates are locked once voting opens." }, 409);
   const r = await sb.from("candidates").delete().eq("id", candidateId);
   if (r.error) return dbConflict(r.error);
+  await removeCandidatePhotoObjects(sb, [c.photo_path]);
   await audit(env, admin.id, "candidate.delete", "candidate", candidateId, { fullName: c.full_name });
   return json({ ok: true });
+}
+
+async function deleteCandidateWithoutPhotoColumn(env, admin, c) {
+  const sb = db(env);
+  const { data: p, error: pError } = await sb.from("positions").select("election_id").eq("id", c.position_id).single();
+  assertDb(pError);
+  if (!(await electionIsDraft(env, p.election_id))) return json({ error: "Candidates are locked once voting opens." }, 409);
+  const r = await sb.from("candidates").delete().eq("id", c.id);
+  if (r.error) return dbConflict(r.error);
+  await audit(env, admin.id, "candidate.delete", "candidate", c.id, { fullName: c.full_name });
+  return json({ ok: true });
+}
+
+async function candidatePhoto(env, candidateId) {
+  const sb = db(env);
+  const { data: candidate, error } = await sb.from("candidates").select("photo_path").eq("id", candidateId).maybeSingle();
+  if (error) {
+    if (candidatePhotoSchemaMissing(error)) return new Response(null, { status: 404 });
+    assertDb(error);
+  }
+  if (!candidate?.photo_path) return new Response(null, { status: 404 });
+  const { data, error: downloadError } = await sb.storage.from(CANDIDATE_PHOTO_BUCKET).download(candidate.photo_path);
+  if (downloadError || !data) return new Response(null, { status: 404 });
+  const headers = new Headers({
+    "content-type": data.type || mimeFromPhotoPath(candidate.photo_path),
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'"
+  });
+  return new Response(data, { status: 200, headers });
 }
 
 async function listVoters(env, url) {
@@ -596,8 +727,13 @@ async function getElectionData(env, electionId) {
   const ids = (positions || []).map(p => p.id);
   let candidates = [];
   if (ids.length) {
-    const r = await sb.from("candidates").select("id,position_id,full_name,statement,sort_order").in("position_id", ids).order("sort_order").order("id");
-    assertDb(r.error); candidates = r.data || [];
+    const r = await sb.from("candidates").select("id,position_id,full_name,statement,sort_order,photo_path").in("position_id", ids).order("sort_order").order("id");
+    if (r.error && candidatePhotoSchemaMissing(r.error)) {
+      const fallback = await sb.from("candidates").select("id,position_id,full_name,statement,sort_order").in("position_id", ids).order("sort_order").order("id");
+      assertDb(fallback.error); candidates = (fallback.data || []).map(publicCandidate);
+    } else {
+      assertDb(r.error); candidates = (r.data || []).map(publicCandidate);
+    }
   }
   for (const p of positions || []) p.candidates = candidates.filter(c => Number(c.position_id) === Number(p.id));
   return { positions: positions || [] };
@@ -620,6 +756,101 @@ function publicUser(u) {
   return { id: u.id, username: u.username, role: u.role, fullName: u.full_name, block: u.block, lot: u.lot };
 }
 function publicElection(e) { return { id: e.id, title: e.title, description: e.description, status: e.status, openedAt: e.opened_at }; }
+function publicCandidate(c) {
+  const { photo_path, ...rest } = c;
+  return { ...rest, has_photo: Boolean(photo_path) };
+}
+
+async function readCandidateForm(request) {
+  const contentType = String(request.headers.get("content-type") || "").toLowerCase();
+  if (contentType.includes("multipart/form-data")) {
+    const form = await request.formData();
+    return { fullName: form.get("fullName"), statement: form.get("statement"), photo: form.get("photo") };
+  }
+  const body = await readJson(request);
+  return { fullName: body?.fullName, statement: body?.statement, photo: null };
+}
+
+function isUploadedFile(value) {
+  return Boolean(value && typeof value === "object" && typeof value.arrayBuffer === "function" && typeof value.size === "number");
+}
+
+async function prepareCandidatePhoto(file) {
+  if (file.size > MAX_CANDIDATE_PHOTO_BYTES) throw new Error("Candidate photo must be 5 MB or smaller.");
+  const mime = String(file.type || "").toLowerCase();
+  const allowed = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+  const ext = allowed[mime];
+  if (!ext) throw new Error("Candidate photo must be a JPEG, PNG, or WebP image.");
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const valid = mime === "image/jpeg"
+    ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : mime === "image/png"
+      ? bytes.length >= 8 && [0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a].every((v,i) => bytes[i] === v)
+      : bytes.length >= 12 && String.fromCharCode(...bytes.slice(0,4)) === "RIFF" && String.fromCharCode(...bytes.slice(8,12)) === "WEBP";
+  if (!valid) throw new Error("The selected file does not appear to be a valid image.");
+  return { buffer, mime, ext };
+}
+
+async function uploadCandidatePhotoObject(sb, candidateId, prepared) {
+  const path = `${candidateId}/${crypto.randomUUID()}.${prepared.ext}`;
+  const { error } = await sb.storage.from(CANDIDATE_PHOTO_BUCKET).upload(path, prepared.buffer, {
+    contentType: prepared.mime,
+    cacheControl: "3600",
+    upsert: false
+  });
+  return { path, error };
+}
+
+async function getCandidateForPhotoChange(sb, candidateId) {
+  const { data: c, error } = await sb.from("candidates").select("id,full_name,position_id,photo_path").eq("id", candidateId).maybeSingle();
+  if (error) {
+    if (candidatePhotoSchemaMissing(error)) return { response: candidatePhotoConfigError(error) };
+    assertDb(error);
+  }
+  if (!c) return { response: json({ error: "Candidate not found." }, 404) };
+  const { data: p, error: pError } = await sb.from("positions").select("election_id").eq("id", c.position_id).single();
+  assertDb(pError);
+  return { fullName: c.full_name, electionId: p.election_id, photoPath: c.photo_path || null };
+}
+
+async function electionCandidatePhotoPaths(sb, electionId) {
+  const { data: positions, error: pError } = await sb.from("positions").select("id").eq("election_id", electionId);
+  assertDb(pError);
+  const ids = (positions || []).map(p => p.id);
+  if (!ids.length) return [];
+  const { data, error } = await sb.from("candidates").select("photo_path").in("position_id", ids);
+  if (error) {
+    if (candidatePhotoSchemaMissing(error)) return [];
+    assertDb(error);
+  }
+  return (data || []).map(c => c.photo_path).filter(Boolean);
+}
+
+async function removeCandidatePhotoObjects(sb, paths) {
+  const cleanPaths = [...new Set((paths || []).filter(Boolean))];
+  if (!cleanPaths.length) return;
+  const { error } = await sb.storage.from(CANDIDATE_PHOTO_BUCKET).remove(cleanPaths);
+  if (error && !/bucket not found|not found/i.test(error.message || "")) console.error("Candidate photo cleanup failed", error);
+}
+
+function candidatePhotoSchemaMissing(error) {
+  const msg = String(error?.message || "");
+  return /photo_path|schema cache/i.test(msg) && /does not exist|could not find|column/i.test(msg);
+}
+function candidatePhotoConfigError(error) {
+  const msg = String(error?.message || "");
+  if (candidatePhotoSchemaMissing(error) || /bucket not found|not found/i.test(msg)) {
+    return json({ error: "Candidate photo storage is not configured yet. Run supabase/add-candidate-photos.sql in the Supabase SQL Editor, then try again." }, 409);
+  }
+  return json({ error: `Candidate photo upload failed: ${msg || "Storage error."}` }, 500);
+}
+function mimeFromPhotoPath(path) {
+  const p = String(path || "").toLowerCase();
+  if (p.endsWith(".png")) return "image/png";
+  if (p.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
 
 function voterSort(a,b) {
   return String(a.block || "").localeCompare(String(b.block || ""), undefined, { numeric: true, sensitivity: "base" }) ||
@@ -642,6 +873,7 @@ function friendlyError(error) {
   const msg = String(error?.message || error || "Unexpected server error.");
   if (msg.startsWith("Supabase is not configured")) return msg;
   if (msg.includes("Could not find the function")) return "Supabase schema is incomplete. Run supabase/schema.sql in the Supabase SQL Editor.";
+  if (/photo_path|candidate-photos/i.test(msg)) return "Candidate photo storage is not configured yet. Run supabase/add-candidate-photos.sql in the Supabase SQL Editor.";
   return "Unexpected server error.";
 }
 async function sha256(value) {
