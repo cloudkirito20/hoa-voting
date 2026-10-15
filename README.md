@@ -23,7 +23,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - First-time administrator setup protected by a private `SETUP_TOKEN`
 - Create elections
 - Draft → Open → Closed election lifecycle
-- Permanently delete Draft/Open/Closed test elections and all related test ballots/results after typing the exact election title
+- Delete unused Draft/Open/Closed elections only; elections containing ballots are protected from deletion and audit history is retained
 - Only one election can be open at a time
 - Add positions
 - Configure how many seats/selections each position allows
@@ -35,9 +35,9 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
   - Block
   - Lot
   - Random unique username
-  - Random 8-character password
+  - Random 12-character password
 - Print/copy newly generated voter credentials
-- Reset voter passwords to a new random 8-character password
+- Reset voter passwords to a new random 12-character password
 - Enable/disable voter accounts
 - Permanently delete voter accounts that have no voting history; voters who have participated in an election must be disabled instead so turnout and participation records remain intact
 - Search voters by name, username, block or lot
@@ -66,7 +66,7 @@ The database keeps `voter_participation` separate from anonymous `ballots` / `ba
 - Cloudflare sessions use random tokens; only SHA-256 token hashes are stored in Supabase.
 - Session cookie: `HttpOnly`, `Secure`, `SameSite=Strict`.
 - CSRF token required for state-changing authenticated API requests.
-- Failed logins are throttled by IP.
+- Failed logins are throttled by IP and by IP + account to reduce shared-Wi-Fi lockouts.
 - Row Level Security is enabled on application tables.
 - `anon` and `authenticated` table access is revoked.
 - Privileged database access is available only to the Cloudflare Worker through `SUPABASE_SECRET_KEY`.
@@ -104,15 +104,13 @@ Run it once.
 
 This creates the tables, indexes, RLS configuration, password functions, ballot transaction, and election configuration locks.
 
-## Existing installation update: deleting an OPEN election
+## Existing installation update: protected election deletion and bulk voter import
 
-If this project was deployed before the open-election deletion update, the Cloudflare Worker may be newer than the PostgreSQL function already installed in Supabase. In that case, deleting an OPEN election can show an error even though the confirmation dialog allows it.
-
-Open **Supabase Dashboard → SQL Editor → New query**, copy the contents of:
-
-`supabase/fix-open-election-delete.sql`
-
-and run it once. This updates only the database guard/delete functions and does not delete any election or voter data by itself.
+The older `fix-open-election-delete.sql` has been retired. Use
+`supabase/upgrade-bulk-voters-and-integrity.sql` instead. The upgraded system
+will not delete elections that contain recorded ballots. Existing test elections
+with votes must be preserved or handled through a separately authorized,
+audited database-retention procedure.
 
 ## Existing installation update: candidate photos
 
@@ -322,12 +320,96 @@ Official references:
 - https://supabase.com/docs/guides/api/creating-routes
 - https://developers.cloudflare.com/workers/platform/limits/
 
-## Deleting a test election
+## Deleting unused elections
 
-In **Admin → Election Setup**, select a Draft, Open, or Closed test election and choose **Delete election**. The admin must type the exact election title before permanent deletion is enabled. Deletion removes the election, positions, candidates, participation records, ballots, vote totals, and election-scoped audit entries so the test run does not remain in election reports/history.
+Admin > Election Setup can delete a Draft, Open, or Closed election only if it
+contains **no submitted ballots**. Deleting a populated election is blocked to
+protect voter participation and vote records. Audit log history is preserved.
 
-If this feature is being added to an already-created Supabase project, run the updated `supabase/schema.sql` once in Supabase SQL Editor before deploying the updated Worker. The schema is written with `create or replace`/`if not exists` statements so it can be rerun safely for this update.
+---
 
-## Deleting test elections
+# v2.1 Audit & Upgrade: Bulk voter import and private A4 vouchers
 
-Admin → Election Setup now shows **Delete election** for Draft, Open, and Closed elections. Deleting an Open election stops voting immediately and permanently removes that election's positions, candidates, participation rows, ballots, vote totals, and election-specific test history. Registered voter accounts are kept. The administrator must type the exact election title to confirm permanent deletion.
+**This upgrade provides bulk import, stronger one-time voter passwords, A4 vouchers, and additional election-integrity safeguards.**
+
+## Required database migration (before deploying the upgraded Worker)
+
+1. Back up the live Supabase database and source files.
+2. Check for duplicate unit accounts already in the database:
+
+   ```sql
+   select lower(trim(block)) as block, lower(trim(lot)) as lot, count(*)
+   from public.users
+   where role='voter'
+   group by 1,2
+   having count(*) > 1;
+   ```
+
+   Resolve any duplicates before running the migration. Do not delete a user who
+   already participated; reconcile account eligibility with the election committee.
+3. In Supabase SQL Editor, run `supabase/upgrade-bulk-voters-and-integrity.sql`
+   **one time**. For a brand-new database, the updated `supabase/schema.sql` already includes
+   the upgrade. It is safe to re-run the standalone upgrade after a successful installation.
+4. Deploy the new Worker and browser assets with `npm install` and `npm run deploy`.
+5. Test 1-2 fake voters before importing actual voter credentials.
+
+**Migration effects**: Uniqueness is enforced for voters by normalized Block and
+Lot, including inactive accounts. This assumes **one account per eligible unit**;
+the HOA must first confirm whether an owner with multiple units can cast multiple
+votes. The migration also removes the precise timestamp from anonymous ballot
+rows, including historical stored timestamps, to prevent exact-timestamp linkage
+with participation records. Participation timestamps are retained. It aggregates vote totals in PostgreSQL to avoid truncated counting. It prevents
+website deletion of elections that have received ballots and retains election
+audit entries when unused elections are deleted. It locks new voter registration
+while an election is open and locks the election row during ballot submission.
+
+Do not run the older `fix-open-election-delete.sql` after applying v2.1, since that
+older script was designed for test-election deletion; v2.1 supersedes it.
+
+## How to bulk-register the homeowners
+
+1. Open the accompanying `HOA_Voter_Review.xlsx` and resolve the highlighted
+   entries. **The July 2026 housing turnover roster is not an approved voter roll.**
+   HOA election officials must confirm eligibility, proxies, and the voting unit.
+2. In Excel choose the `Voters - Review` sheet, mark eligible entries with
+   `YES` in `approved`, and **Save As -> CSV UTF-8 (Comma delimited)**. Alternatively
+   edit the accompanying `HOA_Voter_Staging.csv` directly and save it as UTF-8.
+   The web app imports CSV, not `.xlsx` directly.
+3. Log in as administrator and visit **Voter Registration**.
+4. Under **Bulk Registration + A4 Vouchers**, select the CSV. The app checks
+   malformed rows, duplicates in the CSV, existing accounts and repeated owners.
+   Review all warnings; the app will not preselect problematic records.
+5. Select the verified rows, tick the eligibility confirmation, and click
+   **Generate accounts + vouchers**. The browser sends groups of up to 20 voters.
+   Each group is one PostgreSQL transaction; on a failure, prior successful groups
+   remain registered. Reconcile and retry only missing units.
+6. Click **Print vouchers on A4** immediately. Every A4 portrait page fits 8
+   cut-out vouchers (2 columns x 4 rows), each showing homeowner, Block, Lot,
+   username, random 12-character password, and the correct login URL.
+   Browser print settings: A4, portrait, scale 100%, no headers/footers.
+7. Hand out the private slips directly to their authorized residents; retain no
+   unencrypted master list and shred any spoiled printouts.
+
+**One-time password printing:** only bcrypt hashes are stored in Supabase. The
+admin browser receives working passwords once, immediately after registration.
+If a page is reloaded before printing, passwords cannot be retrieved. Use the
+existing password reset action on the affected voter and print the replacement.
+Bulk printing is not available retroactively for previously registered accounts.
+
+## Election integrity caveats / further recommendations
+
+- Do a supervised mock election before deploying for the real ballot. No live
+  Supabase account or production election was available to test here.
+- Administrators can still access live candidate vote counts in Results & Reports;
+  consider restricting tallies until polls close to avoid influencing voting.
+- Eligibility denominator in old reports is based on currently active accounts;
+  snapshot the certified voter roll when opening a formal election for accurate
+  historical turnout and stronger protection against mid-election account changes.
+- Raw database operators and backups can still have metadata/logs capable of
+  correlating transactions. Removing exact ballot timestamps greatly reduces
+  one direct link, but it is **not proof of cryptographic ballot anonymity**.
+- Use individual administrator accounts, protected with MFA on Cloudflare and
+  Supabase, least-privilege access, private distribution of vouchers, and
+  independent election observers.
+- Verify HOA bylaws, COMELEC / DHSUD or other applicable regulations with the
+  HOA's counsel before official use. This is a software audit, not certification.

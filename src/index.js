@@ -25,7 +25,7 @@ export default {
 function db(env) {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.0" } }
+    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.1" } }
   });
 }
 
@@ -73,6 +73,7 @@ async function api(request, env, url) {
 
   if (path === "/api/admin/voters" && method === "GET") return listVoters(env, url);
   if (path === "/api/admin/voters" && method === "POST") return createVoter(request, env, auth.user);
+  if (path === "/api/admin/voters/bulk" && method === "POST") return bulkCreateVoters(request, env, auth.user);
   if (/^\/api\/admin\/voters\/\d+$/.test(path) && method === "DELETE") return deleteVoter(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/voters\/\d+\/reset-password$/.test(path) && method === "POST") return resetVoterPassword(env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/voters\/\d+\/active$/.test(path) && method === "PUT") return toggleVoter(request, env, auth.user, Number(path.split("/")[4]));
@@ -134,23 +135,30 @@ async function login(request, env) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!username || !password) return json({ error: "Enter your username and password." }, 400);
 
+  const usernameKey = username.toLowerCase();
   const cutoff15 = new Date(Date.now() - 15 * 60 * 1000).toISOString();
   const cutoffDay = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   await sb.from("login_attempts").delete().lt("attempted_at", cutoffDay);
-  const { count: recent, error: recentError } = await sb.from("login_attempts").select("id", { count: "exact", head: true }).eq("ip", ip).gte("attempted_at", cutoff15);
-  assertDb(recentError);
-  if (Number(recent || 0) >= 10) return json({ error: "Too many failed login attempts. Please try again later." }, 429);
+  const [ipRate, userRate] = await Promise.all([
+    sb.from("login_attempts").select("id", { count: "exact", head: true }).eq("ip", ip).gte("attempted_at", cutoff15),
+    sb.from("login_attempts").select("id", { count: "exact", head: true }).eq("ip", ip).eq("username", usernameKey).gte("attempted_at", cutoff15)
+  ]);
+  assertDb(ipRate.error); assertDb(userRate.error);
+  // Many neighbors can share a public IP. Use a tight per-IP+account threshold,
+  // but allow more collective login errors before blocking an entire HOA network.
+  if (Number(ipRate.count || 0) >= 80 || Number(userRate.count || 0) >= 8)
+    return json({ error: "Too many failed login attempts. Please try again in 15 minutes." }, 429);
 
   const { data, error } = await sb.rpc("hoa_verify_login", { p_username: username, p_password: password });
   assertDb(error);
   const user = Array.isArray(data) ? data[0] : data;
   if (!user) {
-    const { error: attemptError } = await sb.from("login_attempts").insert({ ip, username });
+    const { error: attemptError } = await sb.from("login_attempts").insert({ ip, username: usernameKey });
     assertDb(attemptError);
     return json({ error: "Invalid username or password." }, 401);
   }
 
-  await sb.from("login_attempts").delete().eq("ip", ip);
+  await sb.from("login_attempts").delete().eq("ip", ip).eq("username", usernameKey);
 
   // Voters may have only one active session at a time. Clean up expired sessions first,
   // then perform a friendly pre-check. PostgreSQL also enforces this rule with a trigger
@@ -279,13 +287,12 @@ async function deleteElection(request, env, admin, electionId) {
   const { data, error: deleteError } = await sb.rpc("hoa_delete_election", { p_election_id: electionId });
   if (deleteError) {
     const msg = deleteError.message || "Unable to delete election.";
-    // Older Supabase deployments still contain the first version of
-    // hoa_delete_election(), which rejected OPEN elections. The web app now
-    // intentionally supports a confirmed permanent delete for Draft, Open,
-    // and Closed elections, so return a useful migration message instead of
-    // the generic 500 error when the Worker and database are out of sync.
+    // V2.1 never deletes elections that have ballots/participation. An older
+    // database may not have the required protection: do not recommend its
+    // retired, destructive test-election deletion migration.
+    if (/submitted ballots cannot be deleted|preserve the election records/i.test(msg)) return json({ error: msg }, 409);
     if (/open election cannot be deleted|close voting first|positions are locked once voting opens|candidates are locked once voting opens/i.test(msg)) {
-      return json({ error: "Supabase needs the open-election delete update. Run supabase/fix-open-election-delete.sql in the Supabase SQL Editor, then try again." }, 409);
+      return json({ error: "Supabase needs the v2.1 integrity upgrade. Back up and run supabase/upgrade-bulk-voters-and-integrity.sql in Supabase SQL Editor. Elections with submitted votes cannot be deleted." }, 409);
     }
     assertDb(deleteError);
   }
@@ -556,9 +563,11 @@ async function createVoter(request, env, admin) {
   const sb = db(env);
   const body = await readJson(request);
   const fullName = clean(body?.fullName, 100);
-  const block = clean(body?.block, 40);
-  const lot = clean(body?.lot, 40);
+  const block = canonicalUnit(body?.block);
+  const lot = canonicalUnit(body?.lot);
   if (!fullName || !block || !lot) return json({ error: "Full name, block, and lot are required." }, 400);
+  const lock = await voterRegistrationLock(sb);
+  if (lock) return lock;
 
   let username = null;
   for (let i = 0; i < 12; i++) {
@@ -569,7 +578,7 @@ async function createVoter(request, env, admin) {
   }
   if (!username) return json({ error: "Could not generate a unique username. Try again." }, 500);
 
-  const password = strongEightCharPassword();
+  const password = strongVoterPassword();
   const { data: id, error } = await sb.rpc("hoa_create_user", {
     p_username: username,
     p_password: password,
@@ -579,15 +588,85 @@ async function createVoter(request, env, admin) {
     p_lot: lot
   });
   if (error) {
-    if (isUnique(error)) return json({ error: "Generated username collision. Please try again." }, 409);
+    if (isUnique(error)) return json({ error: "This Block/Lot already has a voter account, or a username collision occurred." }, 409);
+    if (/registration is locked while an election is open/i.test(error.message || "")) return json({ error: "Voter registration is locked while an election is open." }, 409);
     assertDb(error);
   }
   await audit(env, admin.id, "voter.create", "user", id, { username, fullName, block, lot });
   return json({ ok: true, voter: { id, username, password, fullName, block, lot } }, 201);
 }
 
+// Registration is frozen while an election is live. Batch insert still checks
+// this in PostgreSQL; the Worker check is for a clear and immediate message.
+async function voterRegistrationLock(sb) {
+  const { data, error } = await sb.from("elections").select("id").eq("status", "open").limit(1);
+  assertDb(error);
+  return data?.length ? json({ error: "Voter registration is locked while an election is open." }, 409) : null;
+}
+
+function canonicalUnit(value) {
+  const v = clean(value, 40);
+  return /^0*[0-9]+$/.test(v) ? v.replace(/^0+(?=\d)/, "") : v;
+}
+
+async function bulkCreateVoters(request, env, admin) {
+  const body = await readJson(request);
+  const rows = body?.voters;
+  if (!Array.isArray(rows) || rows.length < 1 || rows.length > 20)
+    return json({ error: "Send 1 to 20 verified voters per batch." }, 400);
+  const batch = [];
+  const units = new Set();
+  for (const row of rows) {
+    const fullName = clean(row?.fullName, 100);
+    const block = canonicalUnit(row?.block);
+    const lot = canonicalUnit(row?.lot);
+    if (!fullName || !block || !lot) return json({ error: "All imported voters need a name, block and lot." }, 400);
+    const key = `${block.toLowerCase()}|${lot.toLowerCase()}`;
+    if (units.has(key)) return json({ error: `Repeated Block/Lot in batch: ${block}/${lot}.` }, 409);
+    units.add(key);
+    batch.push({ fullName, block, lot,
+      username: `HOA-${randomFromAlphabet(8, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789")}`,
+      password: strongVoterPassword() });
+  }
+  const sb = db(env);
+  const lock = await voterRegistrationLock(sb);
+  if (lock) return lock;
+  const { data, error } = await sb.rpc("hoa_bulk_create_voters", { p_voters: batch });
+  if (error) {
+    if (isUnique(error)) return json({ error: "One or more Block/Lot accounts already exist. Refresh the list and retry with only unregistered units." }, 409);
+    if (/registration is locked while an election is open/i.test(error.message || "")) return json({ error: "Voter registration is locked while an election is open." }, 409);
+    assertDb(error);
+  }
+  // Pair each password to the exact database-confirmed username, NOT a returned
+  // array index. A reordered SQL JSON result must never print the wrong secret
+  // on someone else's voucher.
+  const passwordByUsername = new Map(batch.map(v => [v.username, v.password]));
+  const output = (data || []).map(v => ({ ...v, password: passwordByUsername.get(v.username) }));
+  if (output.length !== batch.length || output.some(v => !v.password)) {
+    // Inserts already committed. Never issue guessed credentials; the admin
+    // must reconcile the database and reset affected passwords.
+    console.error("Unexpected bulk credential mapping. Manual password reset required.");
+    return json({ error: "Accounts were created but the database returned an invalid credential mapping. Do not retry this batch; reconcile and reset affected passwords." }, 502);
+  }
+  let auditWarning = false;
+  try {
+    await audit(env, admin.id, "voter.bulk_create", "user", "batch", {
+      count: output.length, units: output.map(v => `${v.block}/${v.lot}`),
+      ids: output.map(v => v.id)
+    });
+  } catch (error) {
+    // Account creation has already committed. Preserve the one-time credentials
+    // in the response even when a secondary audit-table insert is unavailable.
+    console.error("Bulk voter audit logging failed after account creation:", error);
+    auditWarning = true;
+  }
+  return json({ ok: true, count: output.length, voters: output, auditWarning }, 201);
+}
+
 async function deleteVoter(env, admin, voterId) {
   const sb = db(env);
+  const lock = await voterRegistrationLock(sb);
+  if (lock) return lock;
   const { data: voter, error } = await sb.from("users")
     .select("id,username,full_name,block,lot")
     .eq("id", voterId)
@@ -630,21 +709,22 @@ async function deleteVoter(env, admin, voterId) {
 
 async function resetVoterPassword(env, admin, voterId) {
   const sb = db(env);
-  const { data: voter, error } = await sb.from("users").select("id,username,full_name").eq("id", voterId).eq("role", "voter").maybeSingle();
+  const { data: voter, error } = await sb.from("users").select("id,username,full_name,block,lot").eq("id", voterId).eq("role", "voter").maybeSingle();
   assertDb(error);
   if (!voter) return json({ error: "Voter not found." }, 404);
-  const password = strongEightCharPassword();
+  const password = strongVoterPassword();
   const r = await sb.rpc("hoa_reset_password", { p_user_id: voterId, p_password: password });
   assertDb(r.error);
   if (!r.data) return json({ error: "Voter not found." }, 404);
   await audit(env, admin.id, "voter.password_reset", "user", voterId, { username: voter.username });
-  return json({ ok: true, username: voter.username, password, fullName: voter.full_name });
+  return json({ ok: true, username: voter.username, password, fullName: voter.full_name, block: voter.block, lot: voter.lot });
 }
 
 async function toggleVoter(request, env, admin, voterId) {
   const sb = db(env);
   const body = await readJson(request);
   const active = Boolean(body?.active);
+  if (active) { const lock = await voterRegistrationLock(sb); if (lock) return lock; }
   const { data: voter, error } = await sb.from("users").select("id,username").eq("id", voterId).eq("role", "voter").maybeSingle();
   assertDb(error);
   if (!voter) return json({ error: "Voter not found." }, 404);
@@ -725,10 +805,10 @@ async function electionResults(env, electionId) {
     sb.from("users").select("id", { count: "exact", head: true }).eq("role", "voter").eq("active", true),
     sb.from("voter_participation").select("user_id", { count: "exact", head: true }).eq("election_id", electionId),
     getElectionData(env, electionId),
-    sb.from("ballot_votes").select("candidate_id").eq("election_id", electionId)
+    sb.rpc("hoa_candidate_vote_totals", { p_election_id: electionId })
   ]);
   assertDb(eError); assertDb(tError); assertDb(votesR.error);
-  const voteCounts = countBy(votesR.data || [], "candidate_id");
+  const voteCounts = new Map((votesR.data || []).map(x => [String(x.candidate_id), Number(x.votes || 0)]));
   for (const p of detail.positions) {
     let totalVotes = 0;
     const candidates = p.candidates.map(c => {
@@ -924,12 +1004,12 @@ async function sha256(value) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2,"0")).join("");
 }
 function randomString(length) { return randomFromAlphabet(length, "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"); }
-function strongEightCharPassword() {
+function strongVoterPassword() {
   const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const lower = "abcdefghijkmnopqrstuvwxyz";
   const nums = "23456789";
   const chars = [pick(upper), pick(lower), pick(nums)];
-  while (chars.length < 8) chars.push(pick(upper + lower + nums));
+  while (chars.length < 12) chars.push(pick(upper + lower + nums));
   for (let i = chars.length - 1; i > 0; i--) { const j = secureInt(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
   return chars.join("");
 }

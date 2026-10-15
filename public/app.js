@@ -1,6 +1,6 @@
 const app = document.querySelector('#app');
 const toastEl = document.querySelector('#toast');
-let state = { user:null, csrfToken:null, adminTab:'dashboard', elections:[], selectedElectionId:null, reportType:'results' };
+let state = { user:null, csrfToken:null, adminTab:'dashboard', elections:[], selectedElectionId:null, reportType:'results', bulkPreview:[], bulkCredentials:[], bulkAcknowledged:false, bulkBusy:false };
 
 const esc = (s='') => String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt = d => d ? new Date(d).toLocaleString() : '—';
@@ -47,6 +47,7 @@ async function init(){
   }
 }
 window.addEventListener('popstate',()=>init());
+window.addEventListener('beforeunload',e=>{if(state.bulkBusy||state.bulkCredentials?.length){e.preventDefault();e.returnValue='';}});
 function routeHome(){
   const target=state.user?.role==='admin'?'/admin':'/vote';
   if(location.pathname!==target) history.replaceState({},'',target);
@@ -64,13 +65,14 @@ function renderLogin(expectedRole=null){
   enhancePasswordToggles(app);
   document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const d=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});if(expectedRole && d.user.role!==expectedRole){ state.user=d.user; state.csrfToken=d.csrfToken; await doLogout(); throw new Error(`This account belongs to the ${d.user.role} portal.`); } state.user=d.user;state.csrfToken=d.csrfToken;routeHome();}catch(err){toast(err.message,true)}};
 }
-async function doLogout(){try{await api('/api/auth/logout',{method:'POST'});}catch{} state.user=null;state.csrfToken=null;location.pathname==='/admin'?renderLogin('admin'):renderLogin('voter');}
+async function doLogout(){if(state.bulkBusy){toast('Wait for voter import to finish before logging out.',true);return}if(state.bulkCredentials.length&&!confirm('Your new voter passwords have not been cleared. Print the A4 vouchers before logging out. Log out and permanently clear them?'))return;try{await api('/api/auth/logout',{method:'POST'});}catch{} clearBulkSecrets();state.user=null;state.csrfToken=null;location.pathname==='/admin'?renderLogin('admin'):renderLogin('voter');}
 
 function adminShell(content){
+  if(state.adminTab!=='voters') clearBulkSecrets();
   const tabs=[['dashboard','Dashboard'],['elections','Election Setup'],['voters','Voter Registration'],['reports','Results & Reports']];
   app.innerHTML=`<div class="shell"><header class="topbar">${brandLogo('Administrator dashboard')}<div class="user-chip"><div class="avatar">${esc(state.user.fullName?.[0]||'A')}</div><div class="user-meta"><strong>${esc(state.user.fullName)}</strong><small>Administrator</small></div><button class="btn btn-ghost btn-sm no-print" id="logoutBtn">Logout</button></div></header><div class="admin-layout"><aside class="sidebar no-print">${tabs.map(([id,label])=>`<button class="nav-btn ${state.adminTab===id?'active':''}" data-tab="${id}">${label}</button>`).join('')}</aside><section class="content">${content}</section></div></div>`;
   document.querySelector('#logoutBtn')?.addEventListener('click',doLogout);
-  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.adminTab=b.dataset.tab;renderAdmin()});
+  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{if(b.dataset.tab!==state.adminTab){if(state.bulkBusy){toast('Wait for the voter import to finish.',true);return}if(state.bulkCredentials.length&&!confirm('New voter passwords are only visible now. Print the A4 vouchers before leaving this page. Leave and discard them?'))return;}state.adminTab=b.dataset.tab;renderAdmin()});
 }
 async function renderAdmin(){
   if(state.adminTab==='dashboard') return renderDashboard();
@@ -116,8 +118,8 @@ async function removeCandidate(id){if(!confirm('Remove this candidate?'))return;
 async function changeStatus(id,status){const q=status==='open'?'Open voting now? Positions and candidates will be locked.':'Close voting? No more ballots will be accepted and this cannot be reopened.';if(!confirm(q))return;try{await api(`/api/admin/elections/${id}/status`,{method:'PUT',body:JSON.stringify({status})});toast(`Election ${status}.`);renderElections()}catch(err){toast(err.message,true)}}
 function openDeleteElection(election){
   const title=String(election.title||'');
-  const openWarning=election.status==='open'?'<p><strong>This election is currently OPEN.</strong> Deleting it will stop voting immediately and permanently erase ballots already submitted for this election.</p>':'';
-  modal(`<h2>Delete election permanently?</h2><div class="danger-note"><strong>This cannot be undone.</strong>${openWarning}<p>Deleting this election removes its positions, candidates, participation records, ballots, vote totals, and test results. Registered voter accounts will remain.</p></div><p class="muted">To confirm, type the exact election title:</p><div class="confirm-title">${esc(title)}</div><div class="field"><label>Election title</label><input id="deleteElectionTitle" autocomplete="off" spellcheck="false"></div><button class="btn btn-danger btn-block" id="confirmDeleteElection" disabled>Delete election permanently</button>`,()=>{
+  const openWarning=election.status==='open'?'<p><strong>This election is currently OPEN.</strong> Only elections with no submitted ballots can be deleted. Confirm that this draft/test election should be discarded.</p>':'';
+  modal(`<h2>Delete election permanently?</h2><div class="danger-note"><strong>This cannot be undone.</strong>${openWarning}<p><strong>Submitted ballots are protected:</strong> any election containing a submitted ballot or participation history cannot be deleted. For a no-vote test or draft election, deleting it removes its candidates, positions and settings. Registered voter accounts remain.</p></div><p class="muted">To confirm, type the exact election title:</p><div class="confirm-title">${esc(title)}</div><div class="field"><label>Election title</label><input id="deleteElectionTitle" autocomplete="off" spellcheck="false"></div><button class="btn btn-danger btn-block" id="confirmDeleteElection" disabled>Delete election permanently</button>`,()=>{
     const input=document.querySelector('#deleteElectionTitle');
     const button=document.querySelector('#confirmDeleteElection');
     input.oninput=()=>{button.disabled=input.value!==title};
@@ -134,9 +136,12 @@ function openDeleteElection(election){
 }
 
 async function renderVoters(){
-  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
+  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><section class="card bulk-card no-print"><div class="section-title"><div><h2>Bulk Registration + A4 Vouchers</h2><p class="muted tiny">Upload a CSV saved from Excel. Verify eligibility, preview unit duplicates, then issue accounts in batches of 20.</p></div><button class="btn btn-secondary btn-sm" id="bulkTemplate">Download CSV Template</button></div><div class="row bulk-uploader"><label class="field" style="margin:0;flex:1"><span class="tiny">Choose voter CSV (fullName, block, lot; optional approved, reviewNotes)</span><input id="bulkCsvFile" type="file" accept=".csv,text/csv"></label></div><div id="bulkIssued"></div><div id="bulkPreview"></div></section><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div id="voterTable">Loading…</div></div>`);
   const addButton=document.querySelector('#addVoter');
   if(addButton)addButton.onclick=openAddVoter;
+  document.querySelector('#bulkTemplate').onclick=()=>downloadCsv([['fullName','block','lot','approved','reviewNotes']], 'hoa-voter-import-template.csv');
+  document.querySelector('#bulkCsvFile').onchange=readBulkCsv;
+  renderBulkIssued();
   try{
     const e=await api('/api/admin/elections');
     state.elections=e.elections;
@@ -173,7 +178,7 @@ async function loadVoters(){
   }catch(err){toast(err.message,true)}
 }
 function openAddVoter(){
-  modal(`<h2>Register voter</h2><p class="muted">The system will generate a random username and 8-character password.</p><form id="voterForm"><div class="field"><label>Full name</label><input name="fullName" required maxlength="100"></div><div class="form-grid"><div class="field"><label>Block</label><input name="block" required maxlength="40"></div><div class="field"><label>Lot</label><input name="lot" required maxlength="40"></div></div><button class="btn btn-primary btn-block" style="margin-top:14px">Generate voter account</button></form>`,()=>{
+  modal(`<h2>Register voter</h2><p class="muted">The system will generate a random username and 12-character password.</p><form id="voterForm"><div class="field"><label>Full name</label><input name="fullName" required maxlength="100"></div><div class="form-grid"><div class="field"><label>Block</label><input name="block" required maxlength="40"></div><div class="field"><label>Lot</label><input name="lot" required maxlength="40"></div></div><button class="btn btn-primary btn-block" style="margin-top:14px">Generate voter account</button></form>`,()=>{
     const form=document.querySelector('#voterForm');
     if(!form)return;
     form.onsubmit=async e=>{
@@ -206,7 +211,7 @@ function showCredentials(v){
     if(done)done.onclick=closeModal;
   });
 }
-async function resetPass(id){if(!confirm('Generate a new 8-character password? The old password will stop working.'))return;try{const d=await api(`/api/admin/voters/${id}/reset-password`,{method:'POST'});showCredentials({fullName:d.fullName,block:'',lot:'',username:d.username,password:d.password});}catch(err){toast(err.message,true)}}
+async function resetPass(id){if(!confirm('Generate a new 12-character password? The old password will stop working.'))return;try{const d=await api(`/api/admin/voters/${id}/reset-password`,{method:'POST'});showCredentials({fullName:d.fullName,block:d.block,lot:d.lot,username:d.username,password:d.password});}catch(err){toast(err.message,true)}}
 async function toggleVoter(id,active){try{await api(`/api/admin/voters/${id}/active`,{method:'PUT',body:JSON.stringify({active:!!active})});loadVoters()}catch(err){toast(err.message,true)}}
 function openDeleteVoter(voter){
   if(!voter)return;
@@ -226,7 +231,161 @@ function openDeleteVoter(voter){
     input.focus();
   });
 }
-function printCredential(v){const w=window.open('','_blank','width=700,height=600');w.document.write(`<!doctype html><title>Voter Credentials</title><style>@page{size:A4;margin:20mm}body{font-family:Arial;padding:20px}.card{border:2px dashed #777;padding:28px;border-radius:18px;max-width:520px}.code{font:700 24px monospace;margin:6px 0 16px}small{color:#666}</style><div class="card"><h2>HOA Voting Credentials</h2><p><strong>${esc(v.fullName)}</strong></p>${v.block||v.lot?`<p>Block ${esc(v.block)} · Lot ${esc(v.lot)}</p>`:''}<small>Username</small><div class="code">${esc(v.username)}</div><small>Password</small><div class="code">${esc(v.password)}</div><p><small>Keep these credentials private. This password will not be displayed again.</small></p></div><script>window.onload=()=>window.print()<\/script>`);w.document.close();}
+
+
+function clearBulkSecrets(){
+  state.bulkPreview=[];
+  state.bulkCredentials=[];
+  state.bulkAcknowledged=false;
+  state.bulkBusy=false;
+}
+function normalUnit(value){
+  const v=String(value??'').trim();
+  return /^0*[0-9]+$/.test(v)?v.replace(/^0+(?=\d)/,''):v;
+}
+function parseCsv(text){
+  text=String(text||'').replace(/^\ufeff/,'');
+  const rows=[];let row=[],cell='',quoted=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(c==='"'){
+      if(quoted&&text[i+1]==='"'){cell+='"';i++}else if(!quoted&&cell===''){quoted=true}
+      else if(quoted){quoted=false}else{cell+='"'}
+    }else if(c===','&&!quoted){row.push(cell);cell=''}
+    else if((c==='\r'||c==='\n')&&!quoted){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);if(row.some(x=>x.trim()))rows.push(row);row=[];cell=''}
+    else{cell+=c}
+  }
+  if(quoted)throw new Error('CSV has an unmatched quotation mark.');
+  row.push(cell);if(row.some(x=>x.trim()))rows.push(row);
+  return rows;
+}
+async function readBulkCsv(e){
+  const file=e.target.files?.[0];
+  if(!file)return;
+  if(file.size>2*1024*1024){toast('CSV exceeds 2 MB.',true);return}
+  if(state.bulkCredentials.length&&!confirm('Print the previous batch vouchers before loading a new file. Clear the current one-time passwords?')){e.target.value='';return}
+  state.bulkCredentials=[];
+  state.bulkPreview=[];
+  state.bulkAcknowledged=false;
+  renderBulkIssued();
+  const box=document.querySelector('#bulkPreview');
+  box.textContent='Checking voter CSV...';
+  try{
+    const rows=parseCsv(await file.text());
+    if(rows.length<2||rows.length>505)throw new Error('CSV needs a header and 1–500 voter rows.');
+    // Excel exports the styled review workbook with three title/notes rows
+    // before its real header. Locate the real header rather than guessing row 1.
+    const headerAt=rows.findIndex(r=>{
+      const fields=r.map(h=>h.toLowerCase().replace(/[^a-z0-9]/g,''));
+      return ['fullname','buyersname','name','residentname'].some(h=>fields.includes(h))&&
+        ['block','blk'].some(h=>fields.includes(h))&&fields.includes('lot');
+    });
+    if(headerAt<0)throw new Error('Required CSV columns: fullName, block, lot.');
+    const keys=rows[headerAt].map(h=>h.toLowerCase().replace(/[^a-z0-9]/g,''));
+    const col=(...aliases)=>aliases.map(x=>keys.indexOf(x)).find(i=>i>=0)??-1;
+    const nc=col('fullname','buyersname','name','residentname'),bc=col('block','blk'),lc=col('lot'),ac=col('approved','eligible','import'),rc=col('reviewnotes','notes','flag');
+    const entries=rows.slice(headerAt+1).map((r,index)=>({
+      line:index+headerAt+2,fullName:String(r[nc]||'').trim(),block:normalUnit(r[bc]),lot:normalUnit(r[lc]),
+      approved:String(r[ac]||'').trim().toUpperCase(),reviewNotes:String(r[rc]||'').trim(),
+      selected:false,imported:false,errors:[],warnings:[]
+    }));
+    if(entries.length<1||entries.length>500)throw new Error('CSV must contain 1–500 voter rows.');
+    const existing=await api('/api/admin/voters');
+    const units=new Set(existing.voters.map(x=>`${normalUnit(x.block).toLowerCase()}|${normalUnit(x.lot).toLowerCase()}`));
+    const unitCounts=new Map(),nameCounts=new Map();
+    for(const r of entries){
+      const k=`${r.block.toLowerCase()}|${r.lot.toLowerCase()}`;
+      unitCounts.set(k,(unitCounts.get(k)||0)+1);
+      const n=r.fullName.toLowerCase().replace(/\s+/g,' ');nameCounts.set(n,(nameCounts.get(n)||0)+1);
+    }
+    for(const r of entries){
+      const k=`${r.block.toLowerCase()}|${r.lot.toLowerCase()}`;
+      if(!r.fullName||!r.block||!r.lot)r.errors.push('Missing name, block or lot');
+      if(r.fullName.length>100||r.block.length>40||r.lot.length>40)r.errors.push('Field too long');
+      if(unitCounts.get(k)>1)r.errors.push('Duplicate Block/Lot in CSV');
+      if(units.has(k))r.errors.push('Already registered');
+      if(nameCounts.get(r.fullName.toLowerCase().replace(/\s+/g,' '))>1)r.warnings.push('Same owner appears on multiple units');
+      if(r.reviewNotes)r.warnings.push(r.reviewNotes);
+      r.selected=(!r.errors.length&&!r.warnings.length&&['YES','TRUE','1'].includes(r.approved));
+    }
+    state.bulkPreview=entries;
+    renderBulkPreview();
+  }catch(err){box.innerHTML=`<div class="danger-note">${esc(err.message)}</div>`;toast(err.message,true)}
+}
+function renderBulkPreview(){
+  const box=document.querySelector('#bulkPreview');
+  if(!box)return;
+  const rows=state.bulkPreview;
+  if(!rows.length){box.innerHTML='';return}
+  const hard=rows.filter(x=>x.errors.length).length;
+  const warnings=rows.filter(x=>!x.errors.length&&x.warnings.length).length;
+  const selected=rows.filter(x=>x.selected&&!x.imported&&!x.errors.length).length;
+  box.innerHTML=`<div class="bulk-summary"><strong>${rows.length} CSV rows</strong><span>${selected} selected</span><span>${hard} blocked</span><span>${warnings} need review</span></div><div class="actions" style="margin:12px 0"><button id="bulkSelectClear" class="btn btn-secondary btn-sm" ${state.bulkBusy?'disabled':''}>Select all clear rows</button><button id="bulkClearSelection" class="btn btn-ghost btn-sm" ${state.bulkBusy?'disabled':''}>Unselect all</button></div><div class="bulk-table-wrap"><table class="table"><thead><tr><th>Import</th><th>CSV line</th><th>Homeowner</th><th>Block</th><th>Lot</th><th>Review</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="bulk-include" data-bulk-index="${i}" ${r.selected?'checked':''} ${r.errors.length||r.imported||state.bulkBusy?'disabled':''} aria-label="Import ${esc(r.fullName)}"></td><td>${r.line}</td><td>${esc(r.fullName)}</td><td>${esc(r.block)}</td><td>${esc(r.lot)}</td><td>${r.imported?'<span class="badge badge-voted">Created</span>':r.errors.length?`<span class="bulk-error">${esc(r.errors.join('; '))}</span>`:r.warnings.length?`<span class="bulk-warning">${esc(r.warnings.join('; '))}</span>`:'Clear'}</td></tr>`).join('')}</tbody></table></div><label class="bulk-confirm"><input id="bulkEligibility" type="checkbox" ${state.bulkAcknowledged?'checked':''} ${state.bulkBusy?'disabled':''}><span>I confirm that each selected Block/Lot is entitled to one voting account under our HOA election rules, and I have resolved the flagged entries.</span></label><div class="actions"><button id="bulkImportNow" class="btn btn-primary" ${!selected||!state.bulkAcknowledged||state.bulkBusy?'disabled':''}>Generate ${selected} account${selected===1?'':'s'} + vouchers</button><span id="bulkProgress" class="tiny muted"></span></div><p class="tiny muted">Do not import a second account for a lot that already exists. Passwords are displayed only once; print the vouchers before refreshing or closing the page.</p>`;
+  box.querySelectorAll('.bulk-include').forEach(input=>input.onchange=()=>{
+    const r=rows[Number(input.dataset.bulkIndex)];r.selected=input.checked;renderBulkPreview();
+  });
+  box.querySelector('#bulkEligibility').onchange=e=>{state.bulkAcknowledged=e.target.checked;renderBulkPreview()};
+  box.querySelector('#bulkSelectClear').onclick=()=>{
+    if(!confirm('Select all unflagged, unregistered rows? Confirm the voter eligibility of these residents first.'))return;
+    rows.forEach(r=>{if(!r.imported&&!r.errors.length&&!r.warnings.length)r.selected=true});renderBulkPreview();
+  };
+  box.querySelector('#bulkClearSelection').onclick=()=>{rows.forEach(r=>r.selected=false);renderBulkPreview()};
+  box.querySelector('#bulkImportNow').onclick=runBulkImport;
+}
+async function runBulkImport(){
+  const selected=state.bulkPreview.filter(x=>x.selected&&!x.imported&&!x.errors.length);
+  if(!selected.length||!state.bulkAcknowledged||state.bulkBusy)return;
+  if(!confirm(`Create ${selected.length} voter accounts now? This issues real credentials that must be printed or privately distributed.`))return;
+  state.bulkBusy=true;
+  renderBulkPreview();
+  const progress=document.querySelector('#bulkProgress');
+  let imported=0;
+  try{
+    for(let i=0;i<selected.length;i+=20){
+      const batch=selected.slice(i,i+20);
+      const result=await api('/api/admin/voters/bulk',{method:'POST',body:JSON.stringify({voters:batch.map(x=>({fullName:x.fullName,block:x.block,lot:x.lot}))})});
+      if(result.voters.length!==batch.length)throw new Error('Database returned an unexpected number of accounts. Stop and reconcile before retrying.');
+      state.bulkCredentials.push(...result.voters);
+      if(result.auditWarning)alert('Accounts were created, but the audit-log write failed. Print credentials and have the election administrator inspect database audit logs.');
+      batch.forEach(x=>{x.imported=true;x.selected=false});
+      imported+=batch.length;
+      if(progress)progress.textContent=`Created ${imported} of ${selected.length} accounts...`;
+      renderBulkIssued();
+    }
+    toast(`Generated ${imported} accounts. Print A4 vouchers now.`);
+  }catch(err){
+    toast(`Stopped after ${imported} accounts: ${err.message}`,true);
+    alert(`Bulk import stopped. ${imported} accounts were created in this run. Previously successful batches remain registered. Print their vouchers now, refresh the voter list, and reconcile the failed batch before retrying.\n\n${err.message}`);
+  }finally{
+    state.bulkBusy=false;
+    renderBulkPreview();
+    renderBulkIssued();
+    await loadVoters();
+  }
+}
+function renderBulkIssued(){
+  const box=document.querySelector('#bulkIssued');if(!box)return;
+  if(!state.bulkCredentials.length){box.innerHTML='';return}
+  box.innerHTML=`<div class="bulk-issued"><div><strong>${state.bulkCredentials.length} credential${state.bulkCredentials.length===1?'':'s'} issued</strong><p class="tiny">Passwords are only held in this browser tab until you clear them, refresh, leave this page, or log out. They cannot be retrieved later without resetting each password.</p></div><div class="actions"><button class="btn btn-primary" id="bulkPrint">Print ${state.bulkCredentials.length} vouchers on A4</button><button class="btn btn-ghost btn-sm" id="bulkDiscard">Clear passwords</button></div></div>`;
+  box.querySelector('#bulkPrint').onclick=()=>printVoucherSheet(state.bulkCredentials);
+  box.querySelector('#bulkDiscard').onclick=()=>{if(!confirm('Clear these one-time passwords? You will have to reset passwords to reprint.'))return;state.bulkCredentials=[];renderBulkIssued()};
+}
+function printVoucherSheet(voters){
+  if(!voters?.length)return toast('No newly issued credentials to print.',true);
+  const w=window.open('','_blank','width=980,height=820');
+  if(!w)return toast('Allow popups to print the voucher sheet.',true);
+  w.opener=null;
+  const portal=new URL('/vote',location.origin).href;
+  const sheets=[];
+  for(let i=0;i<voters.length;i+=8){
+    const cards=voters.slice(i,i+8).map((v,j)=>`<article class="voucher"><header><b>CASA VERDE DE BAÑADEROS</b><small>HOA ELECTION - PRIVATE LOGIN</small></header><h2>${esc(v.fullName)}</h2><div class="lot">Block ${esc(v.block||'-')} &nbsp;|&nbsp; Lot ${esc(v.lot||'-')}</div><div class="cred"><label>USERNAME</label><div>${esc(v.username)}</div><label>PASSWORD</label><div>${esc(v.password)}</div></div><footer><strong>${esc(portal)}</strong><span>Private: do not share or photograph. One account, one ballot.</span></footer><small class="num">Voucher ${i+j+1} of ${voters.length}</small></article>`).join('');
+    sheets.push(`<section class="sheet">${cards}</section>`);
+  }
+  w.document.write(`<!doctype html><html lang="en"><head><meta charset="UTF-8"><title>HOA Private A4 Voter Vouchers</title><style>@page{size:A4 portrait;margin:9mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#182c2b}.sheet{width:192mm;height:279mm;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr));gap:2mm;break-after:page;page-break-after:always}.sheet:last-child{break-after:auto;page-break-after:auto}.voucher{position:relative;border:1px dashed #7c9190;border-radius:2mm;padding:3.3mm;display:flex;flex-direction:column;overflow:hidden;break-inside:avoid;page-break-inside:avoid}.voucher header{border-bottom:1px solid #bbd0ce;padding-bottom:1.5mm}.voucher header b{font-size:8pt;letter-spacing:.2px}.voucher header small{display:block;font-size:6.5pt;color:#486661;margin-top:1mm}.voucher h2{font-size:11pt;margin:2.5mm 0 1mm;line-height:1.12;overflow-wrap:anywhere}.lot{font-size:8pt;color:#42545a}.cred{display:grid;grid-template-columns:25mm 1fr;align-items:center;gap:1.1mm 1mm;margin:3mm 0 2mm}.cred label{font-size:7pt;color:#4a6362;font-weight:700}.cred div{font-family:Consolas,monospace;font-weight:800;font-size:13pt;letter-spacing:.35px;overflow-wrap:anywhere}.voucher footer{margin-top:auto;padding-top:1mm;font-size:7pt;display:grid;gap:1mm}.voucher footer strong{overflow-wrap:anywhere}.voucher footer span{color:#526967;font-size:6.7pt}.num{display:block;text-align:right;margin-top:1.5mm;color:#667b7c;font-size:6.5pt}@media screen{body{background:#e8eeee;padding:10px}.sheet{background:white;margin:0 auto 12px;box-shadow:0 5px 20px #888}}@media print{body{padding:0}.sheet{box-shadow:none}}</style></head><body>${sheets.join('')}<script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
+  w.document.close();
+}
+
+function printCredential(v){printVoucherSheet([v]);}
 
 async function renderReports(){
   adminShell(`<div class="page-head"><div><h1>Results & Reports</h1><p>Live/final totals and Block/Lot participation reporting.</p></div><div class="actions"><button class="btn btn-secondary" id="exportCsv">Export CSV</button><button class="btn btn-primary" id="printA4">Print / Save PDF (A4)</button></div></div><div class="card no-print" style="margin-bottom:14px"><div class="row"><select id="reportElection" style="padding:11px;border:1px solid var(--line);border-radius:12px;min-width:240px"></select><button class="btn btn-ghost ${state.reportType==='results'?'active':''}" data-report="results">Election Results</button><button class="btn btn-ghost ${state.reportType==='participation'?'active':''}" data-report="participation">Voter Participation</button></div></div><div id="reportArea" class="card">Loading…</div>`);
@@ -237,7 +396,7 @@ function reportHead(title,status){return `<div class="report-header"><h1>${esc(t
 function drawResults(d){const box=document.querySelector('#reportArea');box.dataset.csv=JSON.stringify({type:'results',data:d});box.innerHTML=`${reportHead(d.election.title,d.election.status)}<div class="section-title"><div><h2>${esc(d.election.title)}</h2><span class="badge badge-${d.election.status}">${d.election.status}</span></div></div><div class="grid grid-4" style="margin-bottom:22px"><div><div class="stat-label">Eligible voters</div><div class="stat-value">${d.eligibleVoters}</div></div><div><div class="stat-label">Ballots cast</div><div class="stat-value">${d.ballotsCast}</div></div><div><div class="stat-label">Turnout</div><div class="stat-value">${d.turnoutPercentage}%</div></div><div><div class="stat-label">Positions</div><div class="stat-value">${d.positions.length}</div></div></div>${d.positions.map(p=>`<section class="result-position"><div class="section-title"><div><h2>${esc(p.title)}</h2><div class="tiny muted">${p.seats} seat${p.seats!==1?'s':''} · ${p.totalVotes} selection${p.totalVotes!==1?'s':''}</div></div></div>${p.candidates.length?p.candidates.map((c,i)=>`<div class="result-row"><div><strong>${esc(c.full_name)}</strong></div><div class="bar"><i style="width:${Math.min(100,c.percentage)}%"></i></div><div class="result-count">${c.votes}</div><div class="result-pct">${c.percentage}%</div></div>`).join(''):'<div class="empty">No candidates.</div>'}</section>`).join('')}`;}
 function drawParticipation(d){const box=document.querySelector('#reportArea');box.dataset.csv=JSON.stringify({type:'participation',data:d});box.innerHTML=`${reportHead(d.election.title,d.election.status)}<div class="section-title"><div><h2>Voter Participation</h2><div class="tiny muted">${esc(d.election.title)}</div></div></div><div class="grid grid-4" style="margin-bottom:18px"><div><div class="stat-label">Registered</div><div class="stat-value">${d.voters.length}</div></div><div><div class="stat-label">Voted</div><div class="stat-value">${d.votedCount}</div></div><div><div class="stat-label">Not voted</div><div class="stat-value">${d.notVotedCount}</div></div><div><div class="stat-label">Status</div><div style="margin-top:10px"><span class="badge badge-${d.election.status}">${d.election.status}</span></div></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Block</th><th>Lot</th><th>Username</th><th>Status</th><th>Voted at</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td>${esc(v.full_name)}</td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td>${esc(v.username)}</td><td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td><td>${v.voted?esc(fmt(v.voted_at)):'—'}</td></tr>`).join('')}</tbody></table></div><p class="tiny muted" style="margin-top:12px">Participation records show whether a resident voted. They do not reveal the resident’s ballot choices.</p>`;}
 function exportCurrentCsv(){const box=document.querySelector('#reportArea');if(!box?.dataset.csv)return;const x=JSON.parse(box.dataset.csv);let rows=[];if(x.type==='results'){rows.push(['Election',x.data.election.title],['Status',x.data.election.status],['Eligible Voters',x.data.eligibleVoters],['Ballots Cast',x.data.ballotsCast],['Turnout',`${x.data.turnoutPercentage}%`],[]);for(const p of x.data.positions){rows.push([p.title,`Seats: ${p.seats}`],['Candidate','Votes','Percentage']);for(const c of p.candidates)rows.push([c.full_name,c.votes,`${c.percentage}%`]);rows.push([])}}else{rows.push(['Election',x.data.election.title],['Name','Block','Lot','Username','Status','Voted At']);for(const v of x.data.voters)rows.push([v.full_name,v.block,v.lot,v.username,v.voted?'Voted':'Not Voted',v.voted_at||''])}downloadCsv(rows,`${slug(x.data.election.title)}-${x.type}.csv`)}
-function downloadCsv(rows,name){const csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)}function slug(s){return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'hoa-election'}
+function downloadCsv(rows,name){const csv=rows.map(r=>r.map(v=>{let x=String(v??''); if(/^[\s]*[=+@-]/.test(x))x="'"+x;return `"${x.replaceAll('\"','\"\"')}"`}).join(',')).join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)}function slug(s){return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'hoa-election'}
 
 async function renderVoter(){
   app.innerHTML=`<div class="ballot-shell"><header class="topbar">${brandLogo('Secure election portal')}<div class="user-chip"><div class="avatar">${esc(state.user.fullName?.[0]||'V')}</div><div class="user-meta"><strong>${esc(state.user.fullName)}</strong><small>Block ${esc(state.user.block||'—')} · Lot ${esc(state.user.lot||'—')}</small></div><button class="btn btn-ghost btn-sm" id="logoutBtn">Logout</button></div></header><div id="ballotArea"><div class="card">Loading election…</div></div></div>`;document.querySelector('#logoutBtn').onclick=doLogout;
