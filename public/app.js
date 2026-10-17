@@ -21,6 +21,22 @@ const initials = name => String(name||'?').trim().split(/\s+/).filter(Boolean).s
 const candidatePhoto = (c,size='') => `<span class="candidate-photo ${size}"><span class="candidate-initials">${esc(initials(c.full_name))}</span>${c.has_photo?`<img data-candidate-photo src="/api/candidates/${Number(c.id)}/photo" alt="Photo of ${esc(c.full_name)}" loading="lazy">`:''}</span>`;
 document.addEventListener('error',e=>{if(e.target?.matches?.('img[data-candidate-photo]'))e.target.classList.add('photo-error')},true);
 
+const uiIcons = {
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  elections: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M8 15l2 2 5-5"/>',
+  voters: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  reports: '<path d="M3 3v18h18M7 15l4-4 4 2 5-7"/><path d="M16 6h4v4"/>',
+  arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  printer: '<path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6zM18 12h.01"/>',
+  upload: '<path d="M12 16V3m-5 5 5-5 5 5M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/>',
+  lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  check: '<path d="m5 12 4 4L19 6"/>'
+};
+const uiIcon = name => `<svg viewBox="0 0 24 24" aria-hidden="true" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${uiIcons[name]||uiIcons.info}</svg>`;
+const statusLabel = status => ({draft:'Draft',open:'Voting open',closed:'Closed'})[status] || String(status||'');
+
 const passwordEyeIcon = visible => visible
   ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.2A10.7 10.7 0 0 1 12 4c5.2 0 9 4.4 10 6.1.3.5.3 1.2 0 1.8a18.8 18.8 0 0 1-3 3.7M6.2 6.3A18 18 0 0 0 2 10.1c-.3.5-.3 1.2 0 1.8C3 13.6 6.8 18 12 18c1.2 0 2.3-.2 3.3-.6"/></svg>`
   : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg>`;
@@ -160,7 +176,7 @@ function renderSetupTokenStep(details){
 function renderVoterPasswordChange(){
   // The server also blocks ballot GET/POST and the SQL transaction itself
   // rejects an unchanged issued password. This form is not the security gate.
-  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>Change your initial password</h1><p class="sub">Before you can view or submit a ballot, replace the temporary password printed on your HOA login voucher.</p><form id="voterChangePasswordForm" autocomplete="on"><div class="field"><label for="voterCurrentPassword">Current password from voucher</label><input id="voterCurrentPassword" name="currentPassword" type="password" autocomplete="current-password" required maxlength="128"></div><div class="field"><label for="voterNewPassword">New password</label><input id="voterNewPassword" name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="72" aria-describedby="newPasswordHint"><small id="newPasswordHint" class="tiny muted">Use at least 12 characters, with a maximum of 72 UTF-8 bytes. A unique passphrase is recommended.</small></div><div class="field"><label for="voterConfirmPassword">Confirm new password</label><input id="voterConfirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="72"></div><button id="updateVoterPassword" type="submit" class="btn btn-primary btn-block">Save password and sign in again</button><button id="changePasswordLogout" type="button" class="btn btn-ghost btn-block" style="margin-top:12px">Log out</button></form><p class="tiny muted" style="margin-top:16px">The administrator cannot retrieve your new password. If you forget it, request a new temporary password.</p></section></div>`;
+  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<div class="auth-eyebrow">ACCOUNT SECURITY · FIRST SIGN IN</div><h1>Create your private password</h1><p class="sub">Before you can view or submit a ballot, replace the temporary password printed on your HOA login voucher.</p><form id="voterChangePasswordForm" autocomplete="on"><div class="field"><label for="voterCurrentPassword">Current password from voucher</label><input id="voterCurrentPassword" name="currentPassword" type="password" autocomplete="current-password" required maxlength="128"></div><div class="field"><label for="voterNewPassword">New password</label><input id="voterNewPassword" name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="72" aria-describedby="newPasswordHint"><small id="newPasswordHint" class="tiny muted">Use at least 12 characters, with a maximum of 72 UTF-8 bytes. A unique passphrase is recommended.</small></div><div class="field"><label for="voterConfirmPassword">Confirm new password</label><input id="voterConfirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="72"></div><button id="updateVoterPassword" type="submit" class="btn btn-primary btn-block">Save password and sign in again</button><button id="changePasswordLogout" type="button" class="btn btn-ghost btn-block" style="margin-top:12px">Log out</button></form><p class="tiny muted" style="margin-top:16px">The administrator cannot retrieve your new password. If you forget it, request a new temporary password.</p></section></div>`;
   enhancePasswordToggles(app);
   document.querySelector('#changePasswordLogout').onclick=doLogout;
   document.querySelector('#voterChangePasswordForm').onsubmit=async e=>{
@@ -191,7 +207,7 @@ function renderVoterPasswordChange(){
 
 function renderLogin(expectedRole=null){
   const admin=expectedRole==='admin';
-  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>${admin?'Admin Portal':'Voter Portal'}</h1><p class="sub">${admin?'Sign in with your administrator account to manage elections, voters, and reports.':'Sign in using the credentials issued by your HOA election administrator.'}</p><form id="loginForm"><div class="field"><label>Username</label><input name="username" required autocomplete="username" autocapitalize="none"></div><div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div><button class="btn btn-primary btn-block">Sign in securely</button></form><p class="tiny muted" style="margin-top:18px">${admin?'Administrator access only.':'For election security, a voter account can be signed in on only one device at a time. Please log out before moving to another device.'}</p>${admin?'':'<p class="tiny muted">Your ballot choices are stored separately from your voter registration record.</p>'}</section></div>`;
+  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<div class="auth-eyebrow">${admin?'ADMINISTRATOR ACCESS':'WELCOME HOMEOWNERS'}</div><h1>${admin?'Administrator sign in':'Sign in to vote'}</h1><p class="sub">${admin?'Sign in with your administrator account to manage elections, voters, and reports.':'Sign in using the credentials issued by your HOA election administrator.'}</p><form id="loginForm"><div class="field"><label>Username</label><input name="username" required autocomplete="username" autocapitalize="none"></div><div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div><button class="btn btn-primary btn-block">Sign in securely</button></form><p class="tiny muted" style="margin-top:18px">${admin?'Administrator access only.':'For election security, a voter account can be signed in on only one device at a time. Please log out before moving to another device.'}</p>${admin?'':'<details class="auth-help"><summary>First time voting? Start here</summary><ol><li>Sign in with your private voucher.</li><li>Choose a new password if prompted.</li><li>Pick candidates and review before submitting.</li></ol></details><p class="tiny muted">Your ballot choices are stored separately from your voter registration record.</p>'}</section></div>`;
   enhancePasswordToggles(app);
   document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const d=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});if(expectedRole && d.user.role!==expectedRole){ state.user=d.user; state.csrfToken=d.csrfToken; await doLogout(); throw new Error(`This account belongs to the ${d.user.role} portal.`); } state.user=d.user;state.csrfToken=d.csrfToken;routeHome();}catch(err){toast(err.message,true)}};
 }
@@ -199,11 +215,31 @@ async function doLogout(){if(state.bulkBusy){toast('Wait for voter import to fin
 
 function adminShell(content){
   if(state.adminTab!=='voters') clearBulkSecrets();
-  const tabs=[['dashboard','Dashboard'],['elections','Election Setup'],['voters','Voter Registration'],['reports','Results & Reports']];
-  app.innerHTML=`<div class="shell"><header class="topbar">${brandLogo('Administrator dashboard')}<div class="user-chip"><div class="avatar">${esc(state.user.fullName?.[0]||'A')}</div><div class="user-meta"><strong>${esc(state.user.fullName)}</strong><small>Administrator</small></div><button class="btn btn-ghost btn-sm no-print" id="logoutBtn">Logout</button></div></header><div class="admin-layout"><aside class="sidebar no-print">${tabs.map(([id,label])=>`<button class="nav-btn ${state.adminTab===id?'active':''}" data-tab="${id}">${label}</button>`).join('')}</aside><section class="content">${content}</section></div></div>`;
+  const tabs=[['dashboard','Overview','dashboard'],['elections','Elections','elections'],['voters','Voters & vouchers','voters'],['reports','Reports','reports']];
+  app.innerHTML=`<div class="shell admin-shell">
+    <header class="topbar site-header">
+      ${brandLogo('ELECTION MANAGEMENT')}
+      <div class="user-chip"><div class="avatar" aria-hidden="true">${esc(state.user.fullName?.[0]||'A')}</div><div class="user-meta"><strong>${esc(state.user.fullName)}</strong><small>Administrator</small></div><button class="btn btn-ghost btn-sm no-print" id="logoutBtn">Log out</button></div>
+    </header>
+    <div class="admin-layout">
+      <nav class="sidebar no-print" aria-label="Admin navigation">
+        <div class="sidebar-heading">WORKSPACE</div>
+        <div class="sidebar-links">${tabs.map(([id,label,icon])=>`<button type="button" class="nav-btn ${state.adminTab===id?'active':''}" aria-current="${state.adminTab===id?'page':'false'}" data-tab="${id}">${uiIcon(icon)}<span>${label}</span></button>`).join('')}</div>
+        <div class="sidebar-security">${uiIcon('shield')}<div><strong>Protected voting</strong><small>Election activity is recorded securely.</small></div></div>
+      </nav>
+      <section class="content" aria-label="Administration content">${content}</section>
+    </div>
+  </div>`;
   document.querySelector('#logoutBtn')?.addEventListener('click',doLogout);
-  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{if(b.dataset.tab!==state.adminTab){if(state.bulkBusy){toast('Wait for the voter import to finish.',true);return}if(state.bulkCredentials.length&&!confirm('New voter passwords are only visible now. Print the A4 vouchers before leaving this page. Leave and discard them?'))return;}state.adminTab=b.dataset.tab;renderAdmin()});
+  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.tab!==state.adminTab){
+      if(state.bulkBusy){toast('Wait for voter import to finish.',true);return}
+      if(state.bulkCredentials.length&&!confirm('Print the issued credential vouchers before leaving this page. Leave and clear them from this tab?'))return;
+    }
+    state.adminTab=b.dataset.tab;renderAdmin();
+  });
 }
+
 async function renderAdmin(){
   if(state.adminTab==='dashboard') return renderDashboard();
   if(state.adminTab==='elections') return renderElections();
@@ -211,31 +247,94 @@ async function renderAdmin(){
   return renderReports();
 }
 async function renderDashboard(){
-  adminShell(`<div class="page-head"><div><h1>Dashboard</h1><p>Election activity at a glance.</p></div></div><div id="dashLoading" class="card">Loading…</div>`);
-  try{const [o,e]=await Promise.all([api('/api/admin/overview'),api('/api/admin/elections')]);state.elections=e.elections;
-    document.querySelector('#dashLoading').outerHTML=`<div class="grid grid-4"><div class="card"><div class="stat-label">Registered voters</div><div class="stat-value">${o.voters}</div><div class="stat-foot">Active voter accounts</div></div><div class="card"><div class="stat-label">Elections</div><div class="stat-value">${o.elections}</div><div class="stat-foot">All election records</div></div><div class="card"><div class="stat-label">Open now</div><div class="stat-value">${o.openElections}</div><div class="stat-foot">Currently accepting ballots</div></div><div class="card"><div class="stat-label">Ever participated</div><div class="stat-value">${o.votersEverParticipated}</div><div class="stat-foot">Includes test and official elections</div></div></div><div class="card" style="margin-top:16px"><div class="section-title"><h2>Recent elections</h2><button class="btn btn-secondary btn-sm" id="goElections">Manage elections</button></div>${e.elections.length?e.elections.slice(0,5).map(x=>electionItem(x)).join(''):'<div class="empty">No elections yet.</div>'}</div>`;
-    document.querySelector('#goElections')?.addEventListener('click',()=>{state.adminTab='elections';renderAdmin()});
-  }catch(err){toast(err.message,true)}
+  adminShell(`<div class="page-head"><div><div class="page-kicker">ADMIN WORKSPACE</div><h1>Overview</h1><p>Everything you need to manage your HOA election.</p></div><button type="button" class="btn btn-primary" id="goElectionsTop">${uiIcon('elections')}Manage elections</button></div><div id="dashLoading" class="card" role="status">Loading dashboard…</div>`);
+  document.querySelector('#goElectionsTop')?.addEventListener('click',()=>{state.adminTab='elections';renderAdmin()});
+  try{
+    const [o,e]=await Promise.all([api('/api/admin/overview'),api('/api/admin/elections')]);state.elections=e.elections;
+    const holder=document.querySelector('#dashLoading');if(!holder)return;
+    holder.outerHTML=`<section class="stats-grid" aria-label="Election statistics">
+      <div class="card stat-card"><div class="stat-label">Registered voters</div><div class="stat-value">${o.voters}</div><div class="stat-foot">Active accounts</div></div>
+      <div class="card stat-card"><div class="stat-label">All elections</div><div class="stat-value">${o.elections}</div><div class="stat-foot">Official and test</div></div>
+      <div class="card stat-card"><div class="stat-label">Voting open now</div><div class="stat-value">${o.openElections}</div><div class="stat-foot">Accepting ballots</div></div>
+      <div class="card stat-card"><div class="stat-label">Voters participated</div><div class="stat-value">${o.votersEverParticipated}</div><div class="stat-foot">Includes test elections</div></div>
+    </section>
+    <div class="dashboard-columns">
+      <section class="card"><div class="section-title"><div><div class="page-kicker">QUICK START</div><h2>Three steps to a ready election</h2></div></div>
+        <div class="quick-step"><span class="step-number">1</span><div><strong>Set up the election</strong><p>Choose Official or Test, set a deadline, and add candidates.</p></div><button class="btn btn-secondary btn-sm" data-goto="elections">Open ${uiIcon('arrow')}</button></div>
+        <div class="quick-step"><span class="step-number">2</span><div><strong>Prepare voter accounts</strong><p>Register eligible homeowners and print private vouchers.</p></div><button class="btn btn-secondary btn-sm" data-goto="voters">Open ${uiIcon('arrow')}</button></div>
+        <div class="quick-step"><span class="step-number">3</span><div><strong>Check reports</strong><p>After voting, review turnout and prepare ELECOM reports.</p></div><button class="btn btn-secondary btn-sm" data-goto="reports">Open ${uiIcon('arrow')}</button></div>
+      </section>
+      <section class="card"><div class="section-title"><div><div class="page-kicker">RECENT ACTIVITY</div><h2>Recent elections</h2></div><button type="button" class="btn btn-ghost btn-sm" data-goto="elections">View all</button></div>
+        ${e.elections.length?e.elections.slice(0,5).map(x=>electionItem(x)).join(''):'<div class="empty"><strong>No elections yet</strong><p>Create a test election to try the voting process, or an official election when you are ready.</p></div>'}
+      </section>
+    </div>`;
+    document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>{state.adminTab=b.dataset.goto;renderAdmin()});
+  }catch(err){const holder=document.querySelector('#dashLoading');if(holder)holder.textContent='Could not load dashboard. Please try again.';toast(err.message,true)}
 }
-function electionItem(x){return `<div class="election-item"><div><h3>${esc(x.title)}</h3><p>${x.is_test?'TEST / PRACTICE':'OFFICIAL'} · ${x.position_count} position(s) · ${x.ballots} ballot(s)</p></div><span class="badge badge-${x.status}">${esc(x.status)}</span></div>`}
+
+function electionItem(x){return `<div class="election-item"><div><h3>${esc(x.title)}</h3><p><span class="type-inline ${x.is_test?'type-test':'type-official'}">${x.is_test?'Test':'Official'}</span><span>${Number(x.position_count)||0} positions · ${Number(x.ballots)||0} ballots</span></p></div><span class="badge badge-${x.status}">${statusLabel(x.status)}</span></div>`}
 
 async function renderElections(){
-  adminShell(`<div class="page-head"><div><h1>Election Setup</h1><p>Create positions, configure seats, and add candidates.</p></div><button class="btn btn-primary" id="newElection">+ New election</button></div><div id="electionArea" class="card">Loading…</div>`);
-  try{const d=await api('/api/admin/elections');state.elections=d.elections;if(!state.selectedElectionId&&d.elections[0])state.selectedElectionId=d.elections[0].id;drawElectionList();document.querySelector('#newElection').onclick=openNewElection;}catch(err){toast(err.message,true)}
+  adminShell(`<div class="page-head"><div><div class="page-kicker">SETUP & VOTING</div><h1>Elections</h1><p>Create an election, add candidates, then open voting when ready.</p></div><button class="btn btn-primary" id="newElection">+ Create election</button></div>
+    <div class="workflow-strip" aria-label="Election setup sequence"><span><b>1</b> Create election</span><span><b>2</b> Add candidates</span><span><b>3</b> Open voting</span></div>
+    <div id="electionArea" class="card">Loading elections…</div>`);
+  document.querySelector('#newElection').onclick=openNewElection;
+  try{
+    const d=await api('/api/admin/elections');state.elections=d.elections;
+    if(!d.elections.some(x=>Number(x.id)===Number(state.selectedElectionId)))state.selectedElectionId=d.elections[0]?.id||null;
+    drawElectionList();
+  }catch(err){const el=document.querySelector('#electionArea');if(el)el.textContent='Unable to load elections.';toast(err.message,true)}
 }
+
 function drawElectionList(){
-  const el=document.querySelector('#electionArea');
-  if(!state.elections.length){el.innerHTML='<div class="empty">Create your first HOA election.</div>';return;}
-  el.innerHTML=`<div class="grid grid-2"><div><div class="section-title"><h2>Elections</h2></div>${state.elections.map(x=>`<button class="nav-btn ${Number(state.selectedElectionId)===Number(x.id)?'active':''}" data-election="${x.id}">${esc(x.title)} <span class="badge badge-${x.status}" style="float:right">${x.status}</span><small style="display:block;font-size:10px;margin-top:2px">${x.is_test?'TEST - practice':'OFFICIAL - protected'}</small></button>`).join('')}</div><div id="electionDetail">Select an election.</div></div>`;
-  el.querySelectorAll('[data-election]').forEach(b=>b.onclick=()=>{state.selectedElectionId=Number(b.dataset.election);drawElectionList();loadElectionDetail()});loadElectionDetail();
+  const el=document.querySelector('#electionArea');if(!el)return;
+  if(!state.elections.length){el.innerHTML='<div class="empty empty-onboarding"><strong>No elections yet</strong><p>Create a Test election for practice or an Official election when you are ready.</p><button class="btn btn-primary" id="createFirstElection">+ Create election</button></div>';el.querySelector('#createFirstElection').onclick=openNewElection;return;}
+  el.innerHTML=`<div class="election-workspace">
+    <div class="election-picker"><div class="section-title"><h2>Your elections</h2><span class="count-pill">${state.elections.length}</span></div>
+      <div class="election-list">${state.elections.map(x=>`<button type="button" class="election-select ${Number(state.selectedElectionId)===Number(x.id)?'active':''}" data-election="${Number(x.id)}" aria-current="${Number(state.selectedElectionId)===Number(x.id)?'true':'false'}"><span class="election-select-title">${esc(x.title)}</span><span class="election-select-meta"><span class="type-inline ${x.is_test?'type-test':'type-official'}">${x.is_test?'Test':'Official'}</span><span class="badge badge-${x.status}">${statusLabel(x.status)}</span></span></button>`).join('')}</div>
+    </div><div id="electionDetail" class="election-detail" aria-live="polite">Select an election.</div>
+  </div>`;
+  el.querySelectorAll('[data-election]').forEach(b=>b.onclick=()=>{state.selectedElectionId=Number(b.dataset.election);drawElectionList();loadElectionDetail()});
+  loadElectionDetail();
 }
+
 async function loadElectionDetail(){
-  if(!state.selectedElectionId)return; const box=document.querySelector('#electionDetail');if(!box)return;box.innerHTML='Loading…';
-  try{const d=await api(`/api/admin/elections/${state.selectedElectionId}`);const e=d.election;box.innerHTML=`<div class="section-title"><div><h2>${esc(e.title)}</h2><span class="badge badge-${e.status}">${e.status}</span><span class="election-type-label ${e.is_test?'test':'official'}">${e.is_test?'TEST / PRACTICE':'OFFICIAL ELECTION'}</span></div><div class="actions">${e.status==='draft'?'<button class="btn btn-primary btn-sm" id="openVote">Open voting</button>':''}${e.status==='open'?'<button class="btn btn-danger btn-sm" id="closeVote">Close voting</button>':''}${e.is_test&&e.status!=='open'?'<button class="btn btn-danger btn-sm" id="deleteElection">Delete TEST election</button>':''}</div></div><p class="muted">${esc(e.description||'No description')}</p><p class="tiny muted">${e.is_test?(e.status==='open'?'Practice election: close voting before deleting this test and its mock votes.':'Practice only: can be deleted, including submitted test ballots.'):'Official election: permanent protection against deletion.'}</p><div class="schedule-summary"><strong>Voting schedule (Philippine time):</strong><div>Earliest opening: ${esc(phDateTime(e.voting_starts_at))} (administrator opens voting)</div><div>Deadline / automatic close: <strong>${esc(phDateTime(e.voting_ends_at))}</strong></div>${e.status==='draft'?'<button type="button" id="editElectionDeadline" class="btn btn-secondary btn-sm" style="margin-top:8px">Edit deadline</button>':''}<div class="tiny muted" style="margin-top:6px">At the cutoff PostgreSQL rejects new ballots; Cloudflare marks the election Closed automatically.</div></div><section class="committee-card" style="background:#f4faf8;padding:12px;border:1px solid var(--line);border-radius:12px;margin:12px 0"><div class="row" style="justify-content:space-between"><strong>Election Committee (ELECOM)</strong>${e.status==='open'?'<span class="tiny muted">Locked while polls are open</span>':'<button class="btn btn-secondary btn-sm" id="manageElecom">Edit committee signatories</button>'}</div><p class="tiny muted" style="margin:5px 0 0">These names will appear on the final tally and election report for signing.</p></section>${e.status!=='draft'?'<p class="tiny muted">Ballot configuration is locked because voting has started.</p>':''}<div class="divider"></div><div class="section-title"><h2>Positions</h2>${e.status==='draft'?'<button class="btn btn-secondary btn-sm" id="addPos">+ Position</button>':''}</div>${d.positions.length?d.positions.map(p=>positionCard(p,e.status)).join(''):'<div class="empty">No positions yet.</div>'}`;
-    document.querySelector('#manageElecom')?.addEventListener('click',()=>openCommitteeEditor(e));document.querySelector('#editElectionDeadline')?.addEventListener('click',()=>openElectionDeadline(e));document.querySelector('#addPos')?.addEventListener('click',()=>openAddPosition(e.id));document.querySelector('#openVote')?.addEventListener('click',()=>changeStatus(e.id,'open'));document.querySelector('#closeVote')?.addEventListener('click',()=>changeStatus(e.id,'closed'));document.querySelector('#deleteElection')?.addEventListener('click',()=>openDeleteElection(e));
-    document.querySelectorAll('[data-addcand]').forEach(b=>b.onclick=()=>openAddCandidate(Number(b.dataset.addcand)));document.querySelectorAll('[data-delpos]').forEach(b=>b.onclick=()=>removePosition(Number(b.dataset.delpos)));document.querySelectorAll('[data-delcand]').forEach(b=>b.onclick=()=>removeCandidate(Number(b.dataset.delcand)));document.querySelectorAll('[data-photocand]').forEach(b=>b.onclick=()=>openCandidatePhoto(Number(b.dataset.photocand)));document.querySelectorAll('[data-delphoto]').forEach(b=>b.onclick=()=>removeCandidatePhoto(Number(b.dataset.delphoto)));
-  }catch(err){box.innerHTML=`<div class="empty">${esc(err.message)}</div>`}
+  if(!state.selectedElectionId)return;
+  const box=document.querySelector('#electionDetail');if(!box)return;box.innerHTML='<div class="loading-note" role="status">Loading election details…</div>';
+  const requested=Number(state.selectedElectionId);
+  try{
+    const d=await api(`/api/admin/elections/${requested}`);if(Number(state.selectedElectionId)!==requested)return;
+    const e=d.election;
+    const readyToOpen=d.positions.length>0 && d.positions.every(p=>Array.isArray(p.candidates)&&p.candidates.length>0);
+    box.innerHTML=`<div class="election-detail-head">
+      <div><div class="page-kicker">ELECTION DETAILS</div><h2>${esc(e.title)}</h2><div class="detail-badges"><span class="badge badge-${e.status}">${statusLabel(e.status)}</span><span class="election-type-label ${e.is_test?'test':'official'}">${e.is_test?'TEST / PRACTICE':'OFFICIAL'}</span></div></div>
+      <div class="actions">${e.status==='draft'?`<button class="btn btn-primary btn-sm" id="openVote" ${readyToOpen?'':'disabled title="Add at least one candidate to each position before opening voting"'}>Open voting</button>`:''}${e.status==='open'?'<button class="btn btn-danger btn-sm" id="closeVote">Close voting</button>':''}</div>
+    </div>
+    ${e.description?`<p class="muted detail-description">${esc(e.description)}</p>`:''}
+    <div class="election-schedule"><div class="section-title"><h3>Voting schedule</h3>${e.status==='draft'?'<button type="button" id="editElectionDeadline" class="btn btn-ghost btn-sm">Edit dates</button>':''}</div>
+      <div class="schedule-values"><div><small>Earliest opening (optional)</small><strong>${esc(phDateTime(e.voting_starts_at))}</strong></div><div><small>Voting deadline · PHT</small><strong>${esc(phDateTime(e.voting_ends_at))}</strong></div></div>
+      <p class="tiny muted">Voting opens manually. The database refuses late ballots at the cutoff.</p>
+    </div>
+    <div class="election-detail-actions"><details class="disclosure compact-disclosure"><summary>${uiIcon('voters')} Election committee <span class="disclosure-sub">ELECOM report signatories</span></summary><div class="disclosure-body"><p class="tiny muted">Saved signatories appear on printed tally and final election reports.</p>${e.status==='open'?'<p class="tiny muted">Locked while voting is open.</p>':'<button class="btn btn-secondary btn-sm" id="manageElecom">Edit ELECOM members</button>'}</div></details>
+      ${e.is_test&&e.status!=='open'?`<details class="disclosure compact-disclosure danger-disclosure"><summary>Delete TEST election <span class="disclosure-sub">Permanent removal of practice data</span></summary><div class="disclosure-body"><p class="tiny muted">Only for practice elections. Voter accounts and other elections are not deleted.</p><button class="btn btn-danger btn-sm" id="deleteElection">Delete TEST election</button></div></details>`:''}
+    </div>
+    <div class="section-title positions-title"><div><div class="page-kicker">BALLOT SETUP</div><h2>Positions & candidates</h2></div>${e.status==='draft'?'<button class="btn btn-secondary btn-sm" id="addPos">+ Add position</button>':''}</div>
+    ${d.positions.length?d.positions.map(p=>positionCard(p,e.status)).join(''):'<div class="empty empty-inline"><strong>Start with a position</strong><p>Add a position such as President or Board Member, then add the candidates.</p></div>'}
+    ${e.status==='draft'&&!readyToOpen?'<p class="tiny muted">Add at least one candidate to every position before opening voting.</p>':''}${e.status!=='draft'?'<p class="tiny muted">Candidate details are locked after voting opens.</p>':''}`;
+    document.querySelector('#manageElecom')?.addEventListener('click',()=>openCommitteeEditor(e));
+    document.querySelector('#editElectionDeadline')?.addEventListener('click',()=>openElectionDeadline(e));
+    document.querySelector('#addPos')?.addEventListener('click',()=>openAddPosition(e.id));
+    document.querySelector('#openVote')?.addEventListener('click',()=>changeStatus(e.id,'open'));
+    document.querySelector('#closeVote')?.addEventListener('click',()=>changeStatus(e.id,'closed'));
+    document.querySelector('#deleteElection')?.addEventListener('click',()=>openDeleteElection(e));
+    document.querySelectorAll('[data-addcand]').forEach(b=>b.onclick=()=>openAddCandidate(Number(b.dataset.addcand)));
+    document.querySelectorAll('[data-delpos]').forEach(b=>b.onclick=()=>removePosition(Number(b.dataset.delpos)));
+    document.querySelectorAll('[data-delcand]').forEach(b=>b.onclick=()=>removeCandidate(Number(b.dataset.delcand)));
+    document.querySelectorAll('[data-photocand]').forEach(b=>b.onclick=()=>openCandidatePhoto(Number(b.dataset.photocand)));
+    document.querySelectorAll('[data-delphoto]').forEach(b=>b.onclick=()=>removeCandidatePhoto(Number(b.dataset.delphoto)));
+  }catch(err){if(document.querySelector('#electionDetail')===box)box.innerHTML=`<div class="empty">${esc(err.message)}</div>`}
 }
+
 function positionCard(p,status){return `<div class="position-card"><div class="position-head"><div><h3>${esc(p.title)}</h3><div class="tiny muted">${p.seats} seat${p.seats!==1?'s':''} · voter may select up to ${p.seats}</div></div>${status==='draft'?`<div class="actions"><button class="btn btn-secondary btn-sm" data-addcand="${p.id}">+ Candidate</button><button class="btn btn-danger btn-sm" data-delpos="${p.id}">Delete</button></div>`:''}</div>${p.candidates.length?p.candidates.map(c=>`<div class="candidate-row"><div class="candidate-admin-main">${candidatePhoto(c,'candidate-photo-sm')}<div><strong>${esc(c.full_name)}</strong><small>${esc(c.statement||'No statement')}</small><small>${c.has_photo?'Photo uploaded':'No photo uploaded'}</small></div></div>${status==='draft'?`<div class="actions candidate-actions"><button class="btn btn-secondary btn-sm" data-photocand="${c.id}">${c.has_photo?'Change photo':'Upload photo'}</button>${c.has_photo?`<button class="btn btn-ghost btn-sm" data-delphoto="${c.id}">Remove photo</button>`:''}<button class="btn btn-ghost btn-sm" data-delcand="${c.id}">Remove</button></div>`:''}</div>`).join(''):'<div class="empty" style="padding:18px">No candidates yet.</div>'}</div>`}
 function electionDeadlineFields(startValue='',endValue=''){
   return `<div class="field"><label>Earliest opening (optional, Philippine time UTC+8)</label><input name="votingStartsInput" type="datetime-local" value="${esc(startValue)}"><small class="tiny muted">Voting never starts automatically. Admin must still open the election.</small></div><div class="field"><label>Voting deadline (required, Philippine time UTC+8)</label><input name="votingEndsInput" type="datetime-local" value="${esc(endValue)}" required><small class="tiny muted">Votes submitted at or after this moment are refused by the database, even after refresh or relogin.</small></div>`;
@@ -271,16 +370,23 @@ async function openCommitteeEditor(e){
   });
 }
 function openNewElection(){
-  modal(`<h2>Create election</h2><p class="muted">Create a Draft, set the closing deadline, then add positions and candidates. Times below are Philippine Standard Time (UTC+8).</p><form id="newElectionForm"><div class="field"><label>Election title</label><input name="title" required maxlength="120" placeholder="2026 HOA Board Election"></div><div class="field"><label>Description</label><textarea name="description" rows="3" maxlength="500"></textarea></div><div class="election-mode-option"><label><input type="checkbox" name="isTest" value="yes"> <strong>This is a TEST election (practice only)</strong></label><small>Unchecked = OFFICIAL election (protected from deletion). Checked = TEST election: clearly labeled, can be deleted after closing, even with practice ballots. Election type cannot change later.</small></div>${electionDeadlineFields()}<button class="btn btn-primary btn-block">Create election</button></form>`,()=>{
+  modal(`<div class="modal-kicker">NEW ELECTION</div><h2>Create an election</h2><p class="muted">Start with a name and closing date. You can add positions and candidates after saving.</p>
+    <form id="newElectionForm"><div class="field"><label for="newElectionTitle">Election name</label><input id="newElectionTitle" name="title" required maxlength="120" placeholder="2026 HOA Board Election"></div>
+      <div class="field"><label for="newElectionDescription">Description <span class="optional">Optional</span></label><textarea id="newElectionDescription" name="description" rows="2" maxlength="500" placeholder="A short explanation for residents"></textarea></div>
+      <fieldset class="election-mode-option"><legend>Election type</legend><label><input type="checkbox" name="isTest" value="yes"> <span><strong>Use TEST / PRACTICE mode</strong><small>For training or mock voting. You can delete a Test election after closing it.</small></span></label><small>Unchecked = OFFICIAL election. Official elections cannot be deleted. The type cannot be changed later.</small></fieldset>
+      <div class="form-section-label">Voting dates <span>Philippine time (PHT)</span></div>${electionDeadlineFields()}
+      <button class="btn btn-primary btn-block" type="submit">Create draft election ${uiIcon('arrow')}</button>
+    </form>`,()=>{
     document.querySelector('#newElectionForm').onsubmit=async ev=>{
       ev.preventDefault();const f=new FormData(ev.currentTarget);
       try{const data={title:f.get('title'),description:f.get('description'),isTest:f.has('isTest'),...validateDeadlineForm(f)};
         const d=await api('/api/admin/elections',{method:'POST',body:JSON.stringify(data)});
-        closeModal();state.selectedElectionId=d.id;renderElections();
+        closeModal();state.selectedElectionId=d.id;renderElections();toast('Draft election created. Next, add positions and candidates.');
       }catch(err){toast(err.message,true)}
     };
   });
 }
+
 function openElectionDeadline(e){
   if(e.status!=='draft')return toast('Voting dates are locked once an election has opened.',true);
   modal(`<h2>Edit voting deadline</h2><p class="muted">Philippine Standard Time (UTC+8). The deadline cannot be changed after opening voting.</p><form id="scheduleEditForm">${electionDeadlineFields(phIsoToInput(e.voting_starts_at),phIsoToInput(e.voting_ends_at))}<button class="btn btn-primary btn-block">Save schedule</button></form>`,()=>{
@@ -323,27 +429,44 @@ function openDeleteElection(election){
 }
 
 async function renderVoters(){
-  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><section class="card bulk-card no-print"><div class="section-title"><div><h2>Bulk Registration + A4 Vouchers</h2><p class="muted tiny">Upload a CSV saved from Excel. Verify eligibility, preview unit duplicates, then issue accounts in batches of 20.</p></div><button class="btn btn-secondary btn-sm" id="bulkTemplate">Download CSV Template</button></div><div class="row bulk-uploader"><label class="field" style="margin:0;flex:1"><span class="tiny">Choose voter CSV (fullName, block, lot; optional approved, reviewNotes)</span><input id="bulkCsvFile" type="file" accept=".csv,text/csv"></label></div><div id="bulkIssued"></div><div id="bulkPreview"></div></section><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div class="row" style="margin:4px 0 12px"><button class="btn btn-secondary btn-sm" id="printSelectedVouchers">Reprint selected vouchers (no password change)</button><button class="btn btn-ghost btn-sm" id="printAllVouchers">Reprint all available</button><button class="btn btn-primary btn-sm" id="printAllQrSlips">Print ALL QR login slips</button></div><p class="tiny muted">QR login slips include name, Block/Lot, username and website QR for all ACTIVE voters; they never expose or change passwords. Original passwords created before the encrypted archive cannot be recovered.</p><div class="actions" style="margin:8px 0 10px"><button class="btn btn-secondary btn-sm" id="issueLegacyQrVouchers">Issue NEW credential vouchers for legacy accounts</button></div><p class="tiny muted">Only use replacement credentials when an existing voter needs a NEW temporary password. This explicitly resets the previous password, requires administrator reauthentication, and is blocked during open voting. Voters who have already changed their initial password are excluded.</p><div id="voterTable">Loading…</div></div>`);
-  const addButton=document.querySelector('#addVoter');
-  if(addButton)addButton.onclick=openAddVoter;
-  document.querySelector('#bulkTemplate').onclick=()=>downloadCsv([['fullName','block','lot','approved','reviewNotes']], 'hoa-voter-import-template.csv');
-  document.querySelector('#bulkCsvFile').onchange=readBulkCsv;
+  adminShell(`<div class="page-head"><div><div class="page-kicker">HOMEOWNER ACCOUNTS</div><h1>Voters & vouchers</h1><p>Manage eligible homeowners and their private login vouchers.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div>
+    <div id="bulkIssued" aria-live="polite"></div>
+    <section class="card voucher-action-card no-print">
+      <div class="section-title"><div><div class="page-kicker">PRINTING</div><h2>Login vouchers</h2><p class="muted tiny">Print from the encrypted archive without changing passwords.</p></div>${uiIcon('printer')}</div>
+      <div class="voucher-actions"><button class="btn btn-primary" id="printAllVouchers">${uiIcon('printer')}Print all available vouchers</button><button class="btn btn-secondary" id="printSelectedVouchers">Print selected vouchers</button><button class="btn btn-ghost" id="printAllQrSlips">QR-only login slips</button></div>
+      <p class="tiny muted">Complete vouchers include the stored original temporary password and QR. QR-only slips have no password.</p>
+      <details class="disclosure advanced-disclosure"><summary>Credential recovery <span class="disclosure-sub">Only when original passwords are unavailable</span></summary><div class="disclosure-body"><p class="tiny muted">This issues NEW temporary passwords for eligible legacy accounts. Previous passwords stop working; an open election blocks the operation.</p><button class="btn btn-danger btn-sm" id="issueLegacyQrVouchers">Issue replacement credentials</button></div></details>
+    </section>
+    <section class="card directory-card"><div class="section-title"><div><div class="page-kicker">DIRECTORY</div><h2>Registered homeowners</h2></div><span id="voterSummary" class="count-pill" aria-live="polite">Loading…</span></div>
+      <div class="directory-filters"><label class="filter-search">Search voters<input id="voterSearch" type="search" placeholder="Name, username, block or lot" autocomplete="off"></label><label>Voting status for<select id="voterElection"><option value="">All accounts</option></select></label></div>
+      <div id="voterTable" aria-live="polite">Loading voters…</div>
+    </section>
+    <section class="card bulk-card no-print"><details id="bulkPanel" class="disclosure disclosure-large"><summary>${uiIcon('upload')} Import voters from CSV <span class="disclosure-sub">Optional · for registering many homeowners</span></summary>
+      <div class="disclosure-body"><p class="muted tiny">Upload a CSV, review duplicates and eligibility, then create accounts in batches of 20.</p><button class="btn btn-secondary btn-sm" id="bulkTemplate">Download CSV template</button>
+      <div class="field"><label for="bulkCsvFile">Choose CSV file</label><input id="bulkCsvFile" type="file" accept=".csv,text/csv"><small>Required columns: fullName, block, lot. Optional: approved, reviewNotes.</small></div>
+      <div id="bulkPreview" aria-live="polite"></div></div>
+    </details></section>`);
+  document.querySelector('#addVoter').onclick=openAddVoter;
+  document.querySelector('#bulkTemplate').onclick=()=>downloadCsv([['fullName','block','lot','approved','reviewNotes']],'hoa-voter-import-template.csv');
+  document.querySelector('#bulkCsvFile').onchange=e=>{document.querySelector('#bulkPanel').open=true;readBulkCsv(e)};
+  document.querySelector('#printSelectedVouchers').onclick=()=>reprintVoterSelection(false);
+  document.querySelector('#printAllVouchers').onclick=()=>reprintVoterSelection(true);
+  document.querySelector('#printAllQrSlips').onclick=printAllQrSlips;
+  document.querySelector('#issueLegacyQrVouchers').onclick=openLegacyReissue;
   renderBulkIssued();
   try{
-    const e=await api('/api/admin/elections');
-    state.elections=e.elections;
-    const electionSelect=document.querySelector('#voterElection');
-    const searchInput=document.querySelector('#voterSearch');
-    // The admin may have navigated to a different section while the request was running.
+    const e=await api('/api/admin/elections');state.elections=e.elections;
+    const electionSelect=document.querySelector('#voterElection');const searchInput=document.querySelector('#voterSearch');
     if(!electionSelect||!searchInput)return;
-    electionSelect.innerHTML='<option value="">No election status</option>'+e.elections.map(x=>`<option value="${x.id}">${x.is_test?'[TEST]':'[OFFICIAL]'} ${esc(x.title)}</option>`).join('');
-    let timer;
-    searchInput.oninput=()=>{clearTimeout(timer);timer=setTimeout(loadVoters,200)};
+    electionSelect.innerHTML='<option value="">All accounts</option>'+e.elections.map(x=>`<option value="${x.id}">${x.is_test?'[TEST]':'[OFFICIAL]'} ${esc(x.title)}</option>`).join('');
+    let timer;searchInput.oninput=()=>{clearTimeout(timer);timer=setTimeout(loadVoters,240)};
     electionSelect.onchange=loadVoters;
     await loadVoters();
   }catch(err){toast(err.message,true)}
 }
+
 async function loadVoters(){
+  const requestId=++voterDirectoryRequest;
   const searchInput=document.querySelector('#voterSearch');
   const electionSelect=document.querySelector('#voterElection');
   const box=document.querySelector('#voterTable');
@@ -354,13 +477,14 @@ async function loadVoters(){
     const d=await api(`/api/admin/voters?search=${q}${eid?`&electionId=${eid}`:''}`);
     // Ignore a stale response if the user left Voter Registration while it was loading.
     const currentBox=document.querySelector('#voterTable');
-    if(!currentBox)return;
-    currentBox.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table"><thead><tr><th><input id="selectAllVouchers" type="checkbox" aria-label="Select every reprintable voter"></th><th>Name</th><th>Block</th><th>Lot</th><th>Username</th>${eid?'<th>Voting</th>':''}<th>Account</th><th>Actions</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td><input type="checkbox" class="voucher-pick" value="${Number(v.id)}" ${v.voucherAvailable?'':'disabled'} aria-label="Select voucher for ${esc(v.full_name)}"></td><td><strong>${esc(v.full_name)}</strong>${v.voucherAvailable?'<div class="tiny" style="color:#067647">Voucher available</div>':'<div class="tiny muted">Original password not printable</div>'}</td><td>${esc(v.block||'—')}</td><td>${esc(v.lot||'—')}</td><td><code>${esc(v.username)}</code></td>${eid?`<td><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not Voted'}</span></td>`:''}<td><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td><div class="actions"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Emergency password reset</button><button class="btn ${v.active?'btn-danger':'btn-secondary'} btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable':'Enable'}</button><button class="btn btn-danger btn-sm" data-delete-voter="${v.id}">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No voters found.</div>';
+    if(!currentBox||requestId!==voterDirectoryRequest)return;
+    const summary=document.querySelector('#voterSummary');if(summary)summary.textContent=`${d.voters.length} shown`;
+    currentBox.innerHTML=d.voters.length?`<div class="table-wrap"><table class="table voter-table"><thead><tr><th><input id="selectAllVouchers" type="checkbox" aria-label="Select all printable vouchers"></th><th>Homeowner</th><th>Block / Lot</th><th>Username</th>${eid?'<th>Voted?</th>':''}<th>Account</th><th>Manage</th></tr></thead><tbody>${d.voters.map(v=>`<tr><td data-label="Select"><input type="checkbox" class="voucher-pick" value="${Number(v.id)}" ${v.voucherAvailable?'':'disabled'} aria-label="Select voucher for ${esc(v.full_name)}"></td><td data-label="Homeowner"><div class="table-name"><strong>${esc(v.full_name)}</strong><small class="${v.voucherAvailable?'voucher-ready':'muted'}">${v.voucherAvailable?'Voucher printable':'No original voucher in archive'}</small></div></td><td data-label="Property">Block ${esc(v.block||'—')} · Lot ${esc(v.lot||'—')}</td><td data-label="Username"><code>${esc(v.username)}</code></td>${eid?`<td data-label="Voted?"><span class="badge ${v.voted?'badge-voted':'badge-not'}">${v.voted?'Voted':'Not voted'}</span></td>`:''}<td data-label="Account"><span class="badge ${v.active?'badge-open':'badge-off'}">${v.active?'Active':'Disabled'}</span></td><td data-label="Actions"><details class="row-menu"><summary aria-label="Manage ${esc(v.full_name)}">Manage</summary><div class="row-menu-content"><button class="btn btn-ghost btn-sm" data-reset="${v.id}">Reset password</button><button class="btn btn-ghost btn-sm" data-toggle="${v.id}" data-active="${v.active?0:1}">${v.active?'Disable account':'Enable account'}</button><button class="btn btn-danger btn-sm" data-delete-voter="${v.id}">Delete account</button></div></details></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><strong>No matching homeowners</strong><p>Try a different name, username, or property number.</p></div>';
     currentBox.querySelector('#selectAllVouchers')?.addEventListener('change',e=>currentBox.querySelectorAll('.voucher-pick:not(:disabled)').forEach(x=>x.checked=e.target.checked));
-    if(document.querySelector('#printSelectedVouchers'))document.querySelector('#printSelectedVouchers').onclick=()=>reprintVoterSelection(false);
-    if(document.querySelector('#printAllVouchers'))document.querySelector('#printAllVouchers').onclick=()=>reprintVoterSelection(true);
-    if(document.querySelector('#printAllQrSlips'))document.querySelector('#printAllQrSlips').onclick=printAllQrSlips;
-    if(document.querySelector('#issueLegacyQrVouchers'))document.querySelector('#issueLegacyQrVouchers').onclick=openLegacyReissue;
+
+
+
+
     currentBox.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetPass(Number(b.dataset.reset)));
     currentBox.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleVoter(Number(b.dataset.toggle),Number(b.dataset.active)));
     currentBox.querySelectorAll('[data-delete-voter]').forEach(b=>{
@@ -646,7 +770,7 @@ async function openLegacyReissue(){
         await loadVoters();
       }catch(err){
         popup?.close();
-        progress.textContent=`Stopped: ${issued} account(s) were successfully reissued. Print them from the Bulk Registration area.`;
+        progress.textContent=`Stopped: ${issued} account(s) were successfully reissued. Print them from the issued vouchers panel.`;
         alert(`Credential reissue stopped after ${issued} successful account(s). Do not retry blindly: completed credentials are saved in this tab and encrypted in Supabase for unchanged reprint. Print the successful vouchers, refresh the voter list, and resolve the error.\n\n${err.message}`);
         renderBulkIssued();
         await loadVoters();
@@ -682,9 +806,32 @@ async function reprintVoterSelection(all){
 function printCredential(v){printVoucherSheet([v]);}
 
 async function renderReports(){
-  adminShell(`<div class="page-head"><div><h1>Results & Reports</h1><p>Live/final totals and Block/Lot participation reporting.</p></div><div class="actions"><button class="btn btn-secondary" id="exportCsv">Export CSV</button><button class="btn btn-secondary" id="printDhsudTally">ELECOM Tally Sheet A4</button><button class="btn btn-primary" id="printDhsudFinal">ELECOM Final Report A4</button><button class="btn btn-ghost" id="printA4">Print current view</button></div></div><div class="card no-print" style="margin-bottom:14px"><div class="row"><select id="reportElection" style="padding:11px;border:1px solid var(--line);border-radius:12px;min-width:240px"></select><button class="btn btn-ghost ${state.reportType==='results'?'active':''}" data-report="results">Election Results</button><button class="btn btn-ghost ${state.reportType==='participation'?'active':''}" data-report="participation">Voter Participation</button></div></div><div id="reportArea" class="card">Loading…</div>`);
-  try{const e=await api('/api/admin/elections');state.elections=e.elections;if(!state.selectedElectionId&&e.elections[0])state.selectedElectionId=e.elections[0].id;const sel=document.querySelector('#reportElection');sel.innerHTML=e.elections.map(x=>`<option value="${x.id}" ${Number(x.id)===Number(state.selectedElectionId)?'selected':''}>${x.is_test?'[TEST]':'[OFFICIAL]'} ${esc(x.title)}</option>`).join('')||'<option>No elections</option>';sel.onchange=()=>{state.selectedElectionId=Number(sel.value);loadReport()};document.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>{state.reportType=b.dataset.report;renderReports()});document.querySelector('#printA4').onclick=()=>window.print();document.querySelector('#printDhsudTally').onclick=()=>printDhsudExport('tally');document.querySelector('#printDhsudFinal').onclick=()=>printDhsudExport('final');document.querySelector('#exportCsv').onclick=exportCurrentCsv;loadReport();}catch(err){toast(err.message,true)}
+  adminShell(`<div class="page-head"><div><div class="page-kicker">ELECTION RECORDS</div><h1>Reports</h1><p>Review turnout, participation, and final election results.</p></div><button class="btn btn-primary" id="printDhsudFinal">${uiIcon('printer')}Print final ELECOM report</button></div>
+    <section class="card report-controls no-print"><div class="report-toolbar"><label for="reportElection">Election<select id="reportElection"></select></label><div class="report-tabs" role="group" aria-label="Report view"><button class="${state.reportType==='results'?'active':''}" data-report="results" aria-pressed="${state.reportType==='results'}">Results</button><button class="${state.reportType==='participation'?'active':''}" data-report="participation" aria-pressed="${state.reportType==='participation'}">Participation</button></div></div>
+      <div class="report-availability tiny muted" id="reportAvailability" aria-live="polite"></div><details class="disclosure report-extra"><summary>Other print and export options <span class="disclosure-sub">CSV, tally sheet and current view</span></summary><div class="disclosure-body actions"><button class="btn btn-secondary btn-sm" id="printDhsudTally">Print ELECOM tally sheet (A4)</button><button class="btn btn-ghost btn-sm" id="exportCsv">Export CSV</button><button class="btn btn-ghost btn-sm" id="printA4">Print current view</button></div></details>
+    </section><div id="reportArea" class="card report-content">Loading report…</div>`);
+  document.querySelector('#printA4').onclick=()=>window.print();
+  document.querySelector('#printDhsudTally').onclick=()=>printDhsudExport('tally');
+  document.querySelector('#printDhsudFinal').onclick=()=>printDhsudExport('final');
+  document.querySelector('#exportCsv').onclick=exportCurrentCsv;
+  try{
+    const e=await api('/api/admin/elections');state.elections=e.elections;
+    if(!e.elections.some(x=>Number(x.id)===Number(state.selectedElectionId)))state.selectedElectionId=e.elections[0]?.id||null;
+    const sel=document.querySelector('#reportElection');if(!sel)return;
+    sel.innerHTML=e.elections.map(x=>`<option value="${x.id}" ${Number(x.id)===Number(state.selectedElectionId)?'selected':''}>${x.is_test?'[TEST]':'[OFFICIAL]'} ${esc(x.title)}</option>`).join('')||'<option value="">No elections</option>';
+    const syncExports=()=>{
+      const selected=e.elections.find(x=>Number(x.id)===Number(state.selectedElectionId));
+      const closed=selected?.status==='closed';
+      ['printDhsudFinal','printDhsudTally'].forEach(id=>{const button=document.getElementById(id);if(button){button.disabled=!closed;button.title=closed?'Print the approved report worksheet':'Available after the election is closed';}});
+      const msg=document.querySelector('#reportAvailability');if(msg)msg.textContent=closed?'This election is closed. Final ELECOM worksheets are available.':'Final ELECOM worksheets can be printed once the election is closed.';
+    };
+    sel.onchange=()=>{state.selectedElectionId=Number(sel.value);syncExports();loadReport()};
+    syncExports();
+    document.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>{state.reportType=b.dataset.report;renderReports()});
+    loadReport();
+  }catch(err){toast(err.message,true)}
 }
+
 async function loadReport(){if(!state.selectedElectionId){document.querySelector('#reportArea').innerHTML='<div class="empty">No election selected.</div>';return}try{if(state.reportType==='results')drawResults(await api(`/api/admin/elections/${state.selectedElectionId}/results`));else drawParticipation(await api(`/api/admin/elections/${state.selectedElectionId}/participation`));}catch(err){toast(err.message,true)}}
 // Data and winner/tie logic come exclusively from a closed election backend
 // response. These are DHSUD-aligned ELECOM worksheets, not government-issued forms.
@@ -719,13 +866,38 @@ async function renderVoter(){
   try{const d=await api('/api/voter/ballot');drawBallot(d)}catch(err){toast(err.message,true)}
 }
 function drawBallot(d){const box=document.querySelector('#ballotArea');if(!d.election){box.innerHTML=`<div class="card empty"><h2>No open election</h2><p>${esc(d.message||'Please check back later.')}</p></div>`;return}if(d.voted){box.innerHTML=`<div class="thankyou-card"><div class="thankyou-icon">✓</div><div class="thankyou-kicker">Ballot successfully recorded</div><h1>Thank you for Voting!</h1><blockquote>“Your voice matters. Thank you for helping shape the future of our community.”</blockquote><p class="thankyou-election">${d.election.isTest?'<strong>TEST / PRACTICE BALLOT - not an official vote.</strong> ':''}Your ballot for <strong>${esc(d.election.title)}</strong> has already been submitted and cannot be submitted again.</p><div class="thankyou-meta"><span>Submitted: ${esc(fmt(d.votedAt))}</span></div><div class="credential receipt-card"><small>Ballot receipt</small><div class="code">${esc(d.receiptCode)}</div><p class="tiny muted">Keep this receipt for your records. It confirms submission without revealing your selections.</p></div></div>`;return}
-  box.innerHTML=`<div class="hero">${d.election.isTest?'<div class="election-type-label test">TEST / PRACTICE - Not an official election</div>':''}<h1>${esc(d.election.title)}</h1><p>${esc(d.election.description||'Select your preferred candidates for each position.')}</p><p class="tiny">Voting closes: ${esc(phDateTime(d.election.voting_ends_at))}</p></div><form id="ballotForm">${d.positions.map(p=>`<section class="ballot-position" data-position="${p.id}" data-seats="${p.seats}"><h2>${esc(p.title)}</h2><p class="instruction">Select up to ${p.seats} candidate${p.seats!==1?'s':''}. Candidate photos are shown to help you verify your selection.</p>${p.candidates.map(c=>`<label class="candidate-option"><input type="checkbox" name="p-${p.id}" value="${c.id}">${candidatePhoto(c,'candidate-photo-ballot')}<span class="candidate-copy"><strong>${esc(c.full_name)}</strong>${c.statement?`<p>${esc(c.statement)}</p>`:''}${!c.has_photo?'<span class="tiny muted">Photo not provided</span>':''}</span></label>`).join('')}</section>`).join('')}<div class="ballot-footer"><div><strong id="selectionCount">0 selections</strong><div class="tiny muted">Review carefully before submitting.</div></div><button class="btn btn-primary" type="submit">Review & Submit</button></div></form>`;
-  document.querySelectorAll('.candidate-option input').forEach(cb=>cb.onchange=e=>{const section=e.target.closest('.ballot-position');const max=Number(section.dataset.seats);const checked=[...section.querySelectorAll('input:checked')];if(checked.length>max){e.target.checked=false;toast(`You may select up to ${max} candidate${max!==1?'s':''} for this position.`,true)}document.querySelectorAll('.candidate-option').forEach(l=>l.classList.toggle('selected',l.querySelector('input').checked));const total=document.querySelectorAll('.candidate-option input:checked').length;document.querySelector('#selectionCount').textContent=`${total} selection${total!==1?'s':''}`});
+  box.innerHTML=`<div class="ballot-progress"><span class="active">1. Choose candidates</span><span>2. Review and submit</span></div><div class="hero">${d.election.isTest?'<div class="election-type-label test">TEST / PRACTICE - Not an official election</div>':''}<h1>${esc(d.election.title)}</h1><p>${esc(d.election.description||'Select your preferred candidates for each position.')}</p><p class="tiny">Voting closes: ${esc(phDateTime(d.election.voting_ends_at))}</p></div><form id="ballotForm">${d.positions.map(p=>`<section class="ballot-position" data-position="${p.id}" data-seats="${p.seats}"><h2>${esc(p.title)}</h2><p class="instruction">Choose up to ${p.seats} candidate${p.seats!==1?'s':''}. Tap a name to select or unselect it.</p><div class="selection-hint" aria-live="polite">0 of ${p.seats} selected</div>${p.candidates.map(c=>`<label class="candidate-option"><input type="checkbox" name="p-${p.id}" value="${c.id}">${candidatePhoto(c,'candidate-photo-ballot')}<span class="candidate-copy"><strong>${esc(c.full_name)}</strong>${c.statement?`<p>${esc(c.statement)}</p>`:''}${!c.has_photo?'<span class="tiny muted">Photo not provided</span>':''}</span></label>`).join('')}</section>`).join('')}<div class="ballot-footer"><div><strong id="selectionCount">0 selections</strong><div class="tiny muted">You can review choices before final submission.</div></div><button class="btn btn-primary" type="submit">Review & Submit</button></div></form>`;
+  document.querySelectorAll('.candidate-option input').forEach(cb=>cb.onchange=e=>{const section=e.target.closest('.ballot-position');const max=Number(section.dataset.seats);const checked=[...section.querySelectorAll('input:checked')];if(checked.length>max){e.target.checked=false;toast(`You may select up to ${max} candidate${max!==1?'s':''} for this position.`,true)}section.querySelector('.selection-hint').textContent=`${[...section.querySelectorAll('input:checked')].length} of ${max} selected`;document.querySelectorAll('.candidate-option').forEach(l=>l.classList.toggle('selected',l.querySelector('input').checked));const total=document.querySelectorAll('.candidate-option input:checked').length;document.querySelector('#selectionCount').textContent=`${total} selection${total!==1?'s':''}`});
   document.querySelector('#ballotForm').onsubmit=e=>{e.preventDefault();const selections={};d.positions.forEach(p=>selections[p.id]=[...document.querySelectorAll(`input[name="p-${p.id}"]:checked`)].map(x=>Number(x.value)));if(!Object.values(selections).some(a=>a.length)){toast('Select at least one candidate.',true);return}openBallotReview(d,selections)};
 }
-function openBallotReview(d,selections){const lines=d.positions.map(p=>{const chosen=p.candidates.filter(c=>selections[p.id].includes(Number(c.id)));return `<div class="review-position"><strong>${esc(p.title)}</strong><div class="review-candidates">${chosen.length?chosen.map(c=>`<div class="review-candidate">${candidatePhoto(c,'candidate-photo-review')}<span>${esc(c.full_name)}</span></div>`).join(''):'<span class="muted">No selection</span>'}</div></div>`}).join('');modal(`<h2>Review your ${d.election.isTest?'TEST':''} ballot</h2>${d.election.isTest?'<p class="tiny">This is a PRACTICE election. The practice ballot may be deleted when the test is closed.</p>':''}<p class="muted">Confirm the candidate names and photos below. Once submitted, your vote cannot be changed.</p>${lines}<label style="display:flex;gap:10px;align-items:flex-start;margin:16px 0"><input id="confirmVote" type="checkbox" style="margin-top:4px"><span>I confirm these are my selections and I am ready to submit my ballot.</span></label><button class="btn btn-primary btn-block" id="finalSubmit" disabled>Submit final ballot</button>`,()=>{document.querySelector('#confirmVote').onchange=e=>document.querySelector('#finalSubmit').disabled=!e.target.checked;document.querySelector('#finalSubmit').onclick=async()=>{const b=document.querySelector('#finalSubmit');b.disabled=true;b.textContent='Submitting…';try{const r=await api('/api/voter/vote',{method:'POST',body:JSON.stringify({electionId:d.election.id,selections})});closeModal();toast('Your vote has been recorded.');drawBallot({...d,voted:true,votedAt:new Date().toISOString(),receiptCode:r.receiptCode});}catch(err){if(/already submitted|already.*ballot/i.test(err.message)){closeModal();try{const latest=await api('/api/voter/ballot');drawBallot(latest);}catch{}toast('Your ballot was already submitted.');return}b.disabled=false;b.textContent='Submit final ballot';toast(err.message,true)}}});}
+function openBallotReview(d,selections){const lines=d.positions.map(p=>{const chosen=p.candidates.filter(c=>selections[p.id].includes(Number(c.id)));return `<div class="review-position"><strong>${esc(p.title)}</strong><div class="review-candidates">${chosen.length?chosen.map(c=>`<div class="review-candidate">${candidatePhoto(c,'candidate-photo-review')}<span>${esc(c.full_name)}</span></div>`).join(''):'<span class="muted">No selection</span>'}</div></div>`}).join('');modal(`<div class="modal-kicker">STEP 2 OF 2 · FINAL CHECK</div><h2>Review your ${d.election.isTest?'TEST':''} ballot</h2>${d.election.isTest?'<p class="tiny">This is a PRACTICE election. The practice ballot may be deleted when the test is closed.</p>':''}<p class="muted">Confirm the candidate names and photos below. Once submitted, your vote cannot be changed.</p>${lines}<label style="display:flex;gap:10px;align-items:flex-start;margin:16px 0"><input id="confirmVote" type="checkbox" style="margin-top:4px"><span>I confirm these are my selections and I am ready to submit my ballot.</span></label><button class="btn btn-primary btn-block" id="finalSubmit" disabled>Submit final ballot</button>`,()=>{document.querySelector('#confirmVote').onchange=e=>document.querySelector('#finalSubmit').disabled=!e.target.checked;document.querySelector('#finalSubmit').onclick=async()=>{const b=document.querySelector('#finalSubmit');b.disabled=true;b.textContent='Submitting…';try{const r=await api('/api/voter/vote',{method:'POST',body:JSON.stringify({electionId:d.election.id,selections})});closeModal();toast('Your vote has been recorded.');drawBallot({...d,voted:true,votedAt:new Date().toISOString(),receiptCode:r.receiptCode});}catch(err){if(/already submitted|already.*ballot/i.test(err.message)){closeModal();try{const latest=await api('/api/voter/ballot');drawBallot(latest);}catch{}toast('Your ballot was already submitted.');return}b.disabled=false;b.textContent='Submit final ballot';toast(err.message,true)}}});}
 
-function modal(html,onOpen){document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" id="modalBackdrop"><div class="modal"><button class="btn btn-ghost btn-sm close" id="modalClose">✕</button><div id="modalContent">${html}</div></div></div>`);document.querySelector('#modalClose').onclick=closeModal;document.querySelector('#modalBackdrop').onclick=e=>{if(e.target.id==='modalBackdrop')closeModal()};onOpen?.()}
-function closeModal(){document.querySelector('#modalBackdrop')?.remove()}
+let previousModalFocus=null;
+let voterDirectoryRequest=0;
+function modal(html,onOpen){
+  if(document.querySelector('#modalBackdrop'))closeModal();
+  previousModalFocus=document.activeElement;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" id="modalBackdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="HOA election dialog"><button class="btn btn-ghost btn-sm close" id="modalClose" type="button" aria-label="Close dialog">✕</button><div id="modalContent">${html}</div></div></div>`);
+  document.body.classList.add('modal-open');
+  document.querySelector('#modalClose').onclick=closeModal;
+  document.querySelector('#modalBackdrop').onclick=e=>{if(e.target.id==='modalBackdrop')closeModal()};
+  onOpen?.();
+  const first=document.querySelector('#modalBackdrop input:not([type="hidden"]), #modalBackdrop select, #modalBackdrop textarea, #modalBackdrop button:not(#modalClose)');
+  (first||document.querySelector('#modalClose'))?.focus?.({preventScroll:true});
+}
+function closeModal(){
+  document.querySelector('#modalBackdrop')?.remove();document.body.classList.remove('modal-open');
+  if(previousModalFocus?.isConnected)previousModalFocus.focus({preventScroll:true});previousModalFocus=null;
+}
+document.addEventListener('keydown',e=>{
+  const backdrop=document.querySelector('#modalBackdrop');if(!backdrop)return;
+  if(e.key==='Escape'){e.preventDefault();closeModal();return}
+  if(e.key!=='Tab')return;
+  const controls=[...backdrop.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],summary')].filter(el=>el.getClientRects().length);
+  if(!controls.length)return;
+  const first=controls[0],last=controls[controls.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
+});
 
 init();

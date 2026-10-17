@@ -1,3 +1,5 @@
+> **v2.5.3 UI refresh:** Simpler mobile-friendly admin and voter interfaces; no SQL changes or voting-security changes. See [UI refresh notes](README_UI_REFRESH_v2.5.3.md).
+
 > **v2.5.2 election modes:** The New election form now defaults to protected Official mode; check **Test election** for a clearly labeled practice election that administrators can delete (with its test votes) after closing. See [v2.5.2 release instructions](README_RELEASE_v2.5.2.md). Voucher-printing features from v2.5.1 are unchanged.
 
 # v2.5 Security, Elections, ELECOM and Voucher Reprinting (2026-10-17)

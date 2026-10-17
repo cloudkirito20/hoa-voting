@@ -70,3 +70,324 @@ button,input,textarea,select{font:inherit} button{cursor:pointer} a{color:inheri
 .election-type-label{display:inline-block;margin-left:8px;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:800;letter-spacing:.3px}
 .election-type-label.test{background:#fff0ca;color:#7d4b00;border:1px solid #f1cf71}
 .election-type-label.official{background:#e5f6eb;color:#16613b;border:1px solid #a8d6b6}
+
+/* v2.5.3 — UI refresh: UI-only. Does not alter credential, ballot or report logic. */
+@media screen {
+  :root {
+    --bg:#f5f8f7;--surface:#fff;--surface2:#f8fbfa;
+    --text:#18332e;--muted:#607470;--primary:#12675b;--primary2:#0c5148;
+    --accent:#1d9d8b;--line:#e0e9e6;--shadow:0 10px 32px rgba(20,57,50,.065);
+    --radius:18px;--max:1440px;
+  }
+  html {scroll-behavior:smooth}
+  body {background:#f5f8f7;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  body.modal-open {overflow:hidden}
+  .shell {padding:26px 28px 40px}
+  .site-header {background:#fff;border:1px solid var(--line);border-radius:20px;padding:12px 22px;margin-bottom:24px;box-shadow:0 4px 18px rgba(20,57,50,.035)}
+  .brand {gap:12px;letter-spacing:-.02em;min-width:0}
+  .brand-logo {width:54px;height:54px;border:0;box-shadow:none;object-fit:contain}
+  .brand-title {font-size:17px;line-height:1.22;max-width:350px;letter-spacing:-.015em}
+  .brand-subtitle {font-weight:800;color:#66827d;letter-spacing:.08em;font-size:10px;margin-top:4px}
+  .user-chip {flex-shrink:0}.user-meta strong {font-size:13px}
+  .avatar {width:36px;height:36px;letter-spacing:.03em}
+  .admin-layout {grid-template-columns:218px minmax(0,1fr);gap:25px;align-items:start}
+  .sidebar {padding:14px 12px;top:24px;box-shadow:none;border-color:#e2ece9;border-radius:18px;overflow:visible}
+  .sidebar-heading {font-size:10px;font-weight:850;letter-spacing:.16em;color:#879c97;padding:12px 13px 13px}
+  .sidebar-links {display:grid;gap:5px}
+  .nav-btn {display:flex;align-items:center;gap:12px;margin:0;min-height:47px;padding:11px 13px;font-size:13.5px;color:#526a64;text-align:left;white-space:normal}
+  .nav-btn .ui-icon {width:19px;height:19px;flex:0 0 auto}
+  .nav-btn.active {background:#e8f4f0;color:#116052;box-shadow:inset 3px 0 0 #1f927c}
+  .nav-btn:hover {background:#f0f7f4;color:#0e6355}
+  .sidebar-security {display:flex;gap:10px;align-items:flex-start;margin-top:27px;padding:14px 11px 7px;border-top:1px solid var(--line);color:#719089}
+  .sidebar-security svg {width:19px;height:19px;flex:none;color:#468476}
+  .sidebar-security strong {display:block;color:#33554c;font-size:12px}
+  .sidebar-security small {display:block;font-size:11px;line-height:1.5;margin-top:3px}
+  .content {min-width:0;padding-bottom:16px}
+  .page-head {align-items:center;margin:0 0 21px;gap:16px}
+  .page-head h1 {font-size:clamp(26px,2.4vw,34px);font-weight:820;line-height:1.2;margin:3px 0 0}
+  .page-head p {font-size:13px;line-height:1.6;margin:6px 0 0;color:#667c76}
+  .page-kicker,.modal-kicker,.auth-eyebrow {font-size:10px;letter-spacing:.13em;font-weight:850;color:#238172}
+  .page-head .btn {flex:none}
+  .ui-icon {width:17px;height:17px;vertical-align:middle;flex:0 0 auto}
+  .btn {min-height:42px;white-space:normal;padding:10px 16px;border-radius:11px;line-height:1.3;box-shadow:none}
+  .btn:hover {transform:none;filter:brightness(.98)}
+  .btn-sm {min-height:36px;padding:8px 12px}
+  .btn-primary {background:#12675b;color:#fff;box-shadow:0 3px 8px rgba(18,103,91,.12)}
+  .btn-primary:hover {background:#0e594f}
+  .btn-secondary {background:#e7f2ee;color:#0d5c51}
+  .btn-ghost {background:#fff;border-color:#dce6e2;color:#44625a}
+  .btn-danger {color:#ad302b;background:#fff2f0;border:1px solid #fad0cb}
+  .btn-danger:hover {background:#ffe8e5}
+  button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible {outline:3px solid rgba(24,137,119,.72);outline-offset:3px}
+  .card {border:1px solid #e1ebe7;border-radius:18px;box-shadow:0 5px 18px rgba(29,63,55,.035);padding:22px}
+  .stats-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:17px}
+  .stat-card {padding:19px 20px;min-height:132px}
+  .stat-label {font-weight:750;color:#637c74;font-size:12px}
+  .stat-value {font-size:34px;color:#173c34;line-height:1.05;margin-top:12px;letter-spacing:-.045em}
+  .stat-foot {color:#7b908a;font-size:11px;margin-top:10px}
+  .dashboard-columns {display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
+  .section-title h2 {font-size:17px;line-height:1.25;color:#1d3c34;letter-spacing:-.02em}
+  .section-title h3 {font-size:14px;margin:0;color:#254b40}
+  .section-title {margin-bottom:15px}
+  .section-title p {margin:5px 0 0}
+  .quick-step {display:flex;gap:13px;align-items:center;border-top:1px solid #edf2ef;padding:16px 0}
+  .quick-step:last-child {padding-bottom:3px}
+  .step-number {display:grid;place-items:center;background:#ebf5f1;color:#0e7365;flex:0 0 31px;height:31px;border-radius:10px;font-weight:850}
+  .quick-step>div {flex:1;min-width:0}
+  .quick-step strong {font-size:13px;color:#284a40}
+  .quick-step p {font-size:12px;line-height:1.5;color:#6a8179;margin:3px 0 0}
+  .quick-step button {min-height:34px}
+  .quick-step button svg {width:14px;height:14px}
+  .election-item {border:0;border-top:1px solid #edf2ef;border-radius:0;margin:0;padding:13px 0;align-items:center}
+  .election-item h3 {font-size:13px;line-height:1.4;margin:0 0 5px}
+  .election-item p {display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px}
+  .type-inline {font-size:10px;font-weight:800;border-radius:6px;padding:2px 6px;line-height:1.3;display:inline-block}
+  .type-test {color:#865c13;background:#fff4d9}
+  .type-official {color:#2b765e;background:#e5f5ec}
+  .badge {font-weight:780;font-size:11px;padding:5px 9px;white-space:nowrap}
+  .badge-open {background:#e4f5ec;color:#076746}
+  .badge-closed {background:#f0f2f4;color:#52646c}
+  .badge-draft {background:#fff1d8;color:#946111}
+  .count-pill {display:inline-block;background:#eff5f3;color:#4c7065;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:850;white-space:nowrap}
+  .empty {line-height:1.6;color:#647b73;padding:26px 18px}
+  .empty strong {display:block;color:#294d43;font-size:15px}
+  .empty p {margin:5px 0 12px}
+  .empty-onboarding {max-width:420px;margin:18px auto}
+  .empty-inline {border:1px dashed #cdded7;background:#fafdfe;border-radius:14px}
+  .workflow-strip {display:flex;flex-wrap:wrap;gap:10px 26px;background:#eaf4f0;border:1px solid #dcebe5;border-radius:14px;margin:-2px 0 17px;padding:13px 17px;color:#42675d;font-size:12px;font-weight:650}
+  .workflow-strip span {display:flex;gap:9px;align-items:center}
+  .workflow-strip b {display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#fff;color:#267969;box-shadow:0 1px 4px rgba(10,78,65,.09)}
+  #electionArea {padding:0;overflow:hidden}
+  .election-workspace {display:grid;grid-template-columns:minmax(220px,29%) minmax(0,1fr);min-height:420px}
+  .election-picker {background:#fcfefd;border-right:1px solid var(--line);padding:20px 15px}
+  .election-picker .section-title {padding:0 7px}
+  .election-list {display:grid;gap:8px}
+  .election-select {width:100%;display:grid;gap:7px;text-align:left;border:1px solid transparent;background:transparent;border-radius:12px;padding:12px 13px;color:#244c41;transition:.15s}
+  .election-select:hover {background:#f1f7f4}
+  .election-select.active {background:#eaf5f0;border-color:#b7dccc;box-shadow:inset 3px 0 0 #20977d}
+  .election-select-title {font-weight:750;font-size:13px;word-break:break-word;line-height:1.4}
+  .election-select-meta {display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .election-select .badge {padding:3px 7px;font-size:10px}
+  .election-detail {padding:24px 26px;min-width:0}
+  .election-detail-head {display:flex;justify-content:space-between;gap:10px;align-items:center;padding-bottom:15px}
+  .election-detail-head h2 {font-size:23px;line-height:1.25;margin:4px 0 9px;letter-spacing:-.035em}
+  .election-detail-head .actions {justify-content:flex-end}
+  .detail-badges {display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .election-type-label {margin:0}
+  .detail-description {margin:2px 0 16px;line-height:1.6}
+  .election-schedule {border:1px solid #ddebe5;background:#f7fbf9;border-radius:14px;padding:16px 18px;margin:0 0 16px}
+  .election-schedule .section-title {margin:0 0 12px}
+  .schedule-values {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .schedule-values>div {min-width:0}
+  .schedule-values small {display:block;color:#6b8179;font-size:11px}
+  .schedule-values strong {display:block;font-size:13px;line-height:1.45;color:#234940;margin-top:4px}
+  .election-schedule p {margin:11px 0 0}
+  .election-detail-actions {display:grid;gap:9px;margin:0 0 20px}
+  .positions-title {border-top:1px solid var(--line);padding-top:18px}
+  .positions-title .page-kicker {margin:0 0 4px}
+  .position-card {border-color:#dfe9e5;background:#fff;border-radius:14px;padding:16px 17px}
+  .position-head h3 {font-size:16px;margin:0 0 4px}
+  .candidate-row {padding:13px 0}
+  .candidate-actions .btn {font-size:11px;min-height:33px}
+  .candidate-admin-main strong {font-size:13px}
+  .disclosure {border:1px solid #e1eae6;border-radius:12px;background:#fff;overflow:visible}
+  .disclosure>summary {cursor:pointer;list-style:none;padding:13px 15px;color:#34594d;font-size:13px;font-weight:800;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .disclosure>summary::-webkit-details-marker {display:none}
+  .disclosure>summary::after {content:'+';font-size:20px;line-height:1;font-weight:450;margin-left:auto;color:#5e8176}
+  .disclosure[open]>summary::after {content:'−'}
+  .disclosure>summary .ui-icon {width:16px;height:16px;color:#488478}
+  .disclosure-sub {font-size:11px;font-weight:450;color:#74867f}
+  .disclosure-body {padding:0 15px 15px}
+  .disclosure-body p {margin:4px 0 12px;line-height:1.5}
+  .danger-disclosure {border-color:#f1ded8}
+  .danger-disclosure>summary {color:#99453a}
+  .election-mode-option {min-width:0;margin:15px 0;padding:13px 15px 14px;border:1px solid #ccded7;background:#f5faf7;border-radius:13px}
+  .election-mode-option legend {font-weight:800;color:#2a5448;font-size:12px;padding:0 7px}
+  .election-mode-option label {display:flex;gap:10px;align-items:flex-start;font-size:13px}
+  .election-mode-option label span {flex:1}
+  .election-mode-option label small {margin:4px 0 0;display:block;font-weight:450;color:#5d776d}
+  .election-mode-option>small {margin:9px 0 0 29px;display:block;font-size:11px;line-height:1.5}
+  .form-section-label {border-top:1px solid var(--line);padding-top:13px;margin:14px 0 8px;color:#294d43;font-weight:850}
+  .form-section-label span {display:inline-block;font-size:11px;color:#769088;font-weight:550;margin-left:7px}
+  .field {gap:7px}
+  .field label {font-weight:750;color:#3c584e;font-size:12px}
+  .field input,.field select,.field textarea,.directory-filters input,.directory-filters select,.report-toolbar select {font-size:14px;border:1px solid #d9e5e0;border-radius:10px;min-height:43px;outline:none;background:#fff;color:#1e3d34}
+  .field input:focus,.field select:focus,.field textarea:focus {border-color:#1d9d8b;box-shadow:0 0 0 3px rgba(18,126,103,.13)}
+  .optional {font-weight:500;font-size:11px;color:#8a9b94}
+  .modal {border-radius:19px;width:min(100%,590px);padding:27px;box-shadow:0 26px 85px rgba(12,37,32,.25)}
+  .modal h2 {font-size:22px;line-height:1.25;color:#203e35;letter-spacing:-.035em;margin:4px 0 7px}
+  .modal .muted {line-height:1.55;font-size:13px}
+  .modal .close {float:right;width:33px;height:33px;padding:0;min-height:33px;border:0;border-radius:9px}
+  .modal-kicker {margin:2px 0 6px}
+  .modal-backdrop {background:rgba(16,42,35,.54);backdrop-filter:blur(2px)}
+  .voucher-action-card {margin-bottom:16px}
+  .voucher-action-card>.section-title>.ui-icon {height:22px;width:22px;color:#4b8a7c}
+  .voucher-actions {display:flex;flex-wrap:wrap;gap:9px;margin:15px 0 10px}
+  .voucher-action-card>p {max-width:680px;margin:6px 0 15px;line-height:1.55}
+  .advanced-disclosure {max-width:720px}
+  .directory-card {margin-bottom:16px}
+  .directory-filters {display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,230px);gap:12px;align-items:end;margin:13px 0 17px}
+  .directory-filters label,.report-toolbar label {display:grid;gap:7px;color:#567368;font-weight:750;font-size:12px}
+  .directory-filters input,.directory-filters select,.report-toolbar select {width:100%;padding:10px 12px}
+  .table-wrap {border-radius:12px;border-color:#e5ece9;max-width:100%}
+  .table th {background:#f7fbf9;color:#66817a;letter-spacing:.045em;border-color:#e8efec;font-weight:800}
+  .table td {border-color:#eef2f0;color:#38584f}
+  .table tr:hover td {background:#fcfefd}
+  .table input[type=checkbox] {width:18px;height:18px;accent-color:var(--primary)}
+  .table-name strong {font-size:13px;color:#2b483e;display:block}
+  .table-name small {display:block;font-size:11px;margin-top:5px}
+  .voucher-ready {color:#18745a;font-weight:700}
+  .table code {font-size:12px;color:#36594c;background:#f1f6f3;padding:4px 6px;border-radius:5px}
+  .row-menu {min-width:86px}
+  .row-menu summary {display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #dae7e1;border-radius:8px;cursor:pointer;white-space:nowrap;background:#fff;font-weight:750;font-size:12px;color:#326052}
+  .row-menu summary::after {content:'⌄';font-weight:850}
+  .row-menu[open] summary {background:#eaf6f1}
+  .row-menu-content {display:flex;flex-wrap:wrap;gap:6px;padding:10px 0 2px;min-width:130px}
+  .row-menu-content .btn {width:100%;font-size:11px;min-height:32px;justify-content:flex-start;text-align:left}
+  .bulk-card {padding:0}
+  .bulk-card .disclosure {border:0}
+  .disclosure-large>summary {padding:19px 22px;font-size:14px}
+  .disclosure-large>.disclosure-body {padding:0 22px 22px}
+  .bulk-issued {border-radius:14px;margin:0 0 16px;box-shadow:0 3px 12px rgba(20,85,60,.06)}
+  .report-controls {margin-bottom:15px}
+  .report-toolbar {display:flex;gap:16px;justify-content:space-between;align-items:end;flex-wrap:wrap}
+  .report-toolbar label {flex:1;max-width:430px;min-width:230px}
+  .report-tabs {background:#edf4f0;padding:5px;border-radius:11px;display:flex;gap:5px}
+  .report-tabs button {border:0;background:transparent;border-radius:8px;min-height:35px;padding:8px 15px;color:#537569;font-weight:750;cursor:pointer}
+  .report-tabs button.active {background:#fff;box-shadow:0 2px 8px rgba(25,66,50,.09);color:#116452}
+  .report-extra {margin-top:13px}
+  .report-extra .actions {padding-top:6px}
+  .report-content {min-height:160px}
+  .auth-wrap {padding:18px;background:radial-gradient(circle at 20% 3%,#dfefe9 0,transparent 40%),#f5f8f7}
+  .auth-card {padding:36px 34px;border-radius:24px;box-shadow:0 16px 50px rgba(16,64,49,.09)}
+  .auth-card h1 {font-size:29px;line-height:1.18;margin:7px 0 9px}
+  .auth-card .brand {margin-bottom:27px}
+  .auth-card .sub {font-size:13px;line-height:1.6;margin-bottom:23px}
+  .auth-eyebrow {margin-top:4px}
+  .auth-help {margin:18px 0 12px;padding:12px 14px;background:#f3f9f6;border:1px solid #dfece5;border-radius:11px}
+  .auth-help summary {cursor:pointer;color:#2d6858;font-weight:750;font-size:12px}
+  .auth-help ol {color:#45695c;font-size:12px;line-height:1.8;padding-left:20px;margin:9px 0 0}
+  .ballot-shell {max-width:900px}
+  .ballot-progress {display:flex;gap:10px;color:#637a72;font-size:12px;font-weight:750;margin-top:6px}
+  .ballot-progress span {padding:9px 13px;border-radius:9px;background:#e9f0ed}
+  .ballot-progress .active {background:#d9f1e8;color:#126858}
+  .hero {background:linear-gradient(135deg,#105a51,#168173);border-radius:19px;padding:24px 27px;box-shadow:0 9px 22px rgba(18,105,89,.13);margin-top:12px}
+  .hero h1 {font-size:28px}
+  .hero p {font-size:13px}
+  .ballot-position {border-radius:17px;padding:20px 22px;margin:15px 0}
+  .ballot-position h2 {font-size:20px;color:#1a4539}
+  .instruction {font-size:13px;line-height:1.5;margin:5px 0 8px}
+  .selection-hint {display:inline-block;border-radius:8px;background:#edf6f1;color:#317662;padding:5px 10px;font-size:11px;font-weight:800;margin:0 0 8px}
+  .candidate-option {min-height:112px;border-color:#e0e8e4;border-radius:13px;margin:9px 0;padding:13px 14px;cursor:pointer}
+  .candidate-option:hover {background:#f8fcfa;border-color:#abd8cb}
+  .candidate-option.selected {background:#eaf7f0;border-color:#4fac91;box-shadow:inset 4px 0 0 #16886e}
+  .candidate-option strong {font-size:15px;color:#1c3e35}
+  .candidate-option p {font-size:12px;color:#607970}
+  .candidate-option input {width:21px;height:21px;margin-top:0;flex:0 0 auto}
+  .ballot-footer {border-radius:14px;bottom:14px;padding:12px 17px}
+  .thankyou-card {box-shadow:0 8px 30px rgba(25,78,65,.08)}
+  .toast {z-index:110;line-height:1.5}
+}
+@media screen and (max-width:1150px) {
+  .admin-layout {grid-template-columns:193px minmax(0,1fr);gap:17px}
+  .stats-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dashboard-columns {grid-template-columns:1fr}
+  .election-workspace {grid-template-columns:minmax(185px,33%) minmax(0,1fr)}
+  .election-detail {padding:21px 20px}
+  .election-detail-head {align-items:start;flex-wrap:wrap}
+}
+@media screen and (max-width:860px) {
+  .shell {padding:16px}
+  .admin-layout {display:block}
+  .sidebar {position:static;display:block;margin-bottom:18px;padding:8px;overflow:visible}
+  .sidebar-heading,.sidebar-security {display:none}
+  .sidebar-links {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+  .nav-btn {width:100%;justify-content:center;padding:10px 7px;min-height:44px;gap:6px;text-align:center;font-size:11px}
+  .nav-btn .ui-icon {width:16px;height:16px}
+  .nav-btn.active {box-shadow:inset 0 -3px 0 #1f927c}
+  .election-workspace {grid-template-columns:1fr}
+  .election-picker {border-right:0;border-bottom:1px solid var(--line);padding:15px}
+  .election-list {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .election-detail {padding:22px}
+}
+@media screen and (max-width:600px) {
+  body {font-size:14px}
+  .shell,.ballot-shell {padding:11px 12px 24px}
+  .site-header {border-radius:15px;padding:10px 12px;gap:6px;margin-bottom:14px}
+  .brand-logo {width:40px;height:40px}
+  .brand-title {font-size:12px;max-width:210px}
+  .brand-subtitle {font-size:9px;letter-spacing:.05em}
+  .site-header .avatar,.site-header .user-meta {display:none}
+  .site-header .btn {font-size:11px;min-height:35px;padding:6px 8px}
+  .page-head {align-items:stretch;gap:13px}
+  .page-head h1 {font-size:27px}
+  .page-head>.btn {align-self:flex-start}
+  .sidebar {margin-bottom:14px}
+  .sidebar-links {grid-template-columns:repeat(4,minmax(0,1fr))}
+  .nav-btn {display:flex;flex-direction:column;gap:4px;min-height:55px;font-size:10px;padding:7px 4px}
+  .nav-btn>span {line-height:1.18}
+  .nav-btn .ui-icon {width:18px;height:18px}
+  .stats-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .stat-card {padding:15px;min-height:116px}
+  .stat-value {font-size:29px}
+  .stat-label {font-size:11px}
+  .card {padding:16px}
+  .quick-step {flex-wrap:wrap}
+  .quick-step button {margin-left:44px}
+  .workflow-strip {gap:10px 15px;padding:12px;font-size:11px}
+  .workflow-strip b {width:19px;height:19px}
+  #electionArea {padding:0}
+  .election-list {grid-template-columns:1fr 1fr;gap:6px}
+  .election-select {padding:11px}
+  .election-detail {padding:17px 15px}
+  .election-detail-head h2 {font-size:21px}
+  .schedule-values {grid-template-columns:1fr}
+  .election-schedule {padding:14px}
+  .section-title {flex-wrap:wrap}
+  .directory-filters {grid-template-columns:1fr}
+  .voucher-actions {flex-direction:column}
+  .voucher-actions .btn {width:100%}
+  .modal-backdrop {padding:8px}
+  .modal {padding:23px 19px;max-height:94dvh}
+  .report-toolbar {display:block}
+  .report-toolbar label {width:100%;max-width:none}
+  .report-tabs {margin-top:13px}
+  .report-tabs button {flex:1}
+  .ballot-progress {gap:5px;font-size:11px}
+  .ballot-progress span {padding:7px 8px;flex:1;text-align:center}
+  .hero {padding:19px 18px;border-radius:16px}
+  .hero h1 {font-size:24px}
+  .ballot-position {padding:16px}
+  .candidate-option {min-height:94px;padding:11px}
+  .candidate-option strong {font-size:14px}
+  .ballot-footer {bottom:6px;gap:8px;padding:10px}
+  .ballot-footer .btn {padding:10px 12px;font-size:12px}
+  .auth-card {padding:26px 21px}
+  .auth-card h1 {font-size:27px}
+}
+@media (prefers-reduced-motion:reduce) {
+  *,*::before,*::after {scroll-behavior:auto!important;transition:none!important;animation:none!important}
+}
+
+/* Small screens: homeowner list becomes readable stacked rows, not a clipped table. */
+@media screen and (max-width:700px) {
+  .voter-table {display:block;min-width:0;width:100%;border-collapse:separate}
+  .voter-table thead {display:none}
+  .voter-table tbody {display:block}
+  .voter-table tr {display:grid;grid-template-columns:24px minmax(0,1fr);gap:5px 10px;padding:12px 13px;border-bottom:1px solid #e9efeb}
+  .voter-table tr:last-child {border-bottom:0}
+  .voter-table td {display:block;border:0;padding:2px 0;min-width:0;font-size:12px}
+  .voter-table td:first-child {grid-column:1;grid-row:1;align-self:start;padding-top:3px}
+  .voter-table td:not(:first-child) {grid-column:2}
+  .voter-table td:nth-child(n+3):before {content:attr(data-label) '  ';font-size:11px;font-weight:750;color:#738980;margin-right:7px}
+  .voter-table td[data-label="Actions"] {margin-top:5px}
+  .voter-table td[data-label="Actions"]:before {content:'';display:none}
+  .voter-table td .row-menu {margin-top:3px}
+  .voter-table .row-menu-content {display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:10px 0 2px}
+  .voter-table .row-menu-content .btn {width:100%;justify-content:center}
+  .voter-table .row-menu-content .btn-danger {grid-column:span 2}
+}
+@media screen and (max-width:600px) {
+  /* On narrow phones, the review action follows all candidates instead of covering them. */
+  .ballot-footer {position:static;margin-top:14px;box-shadow:0 4px 16px rgba(19,69,56,.07)}
+}
