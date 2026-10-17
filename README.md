@@ -1,3 +1,21 @@
+# v2.5 Security, Elections, ELECOM and Voucher Reprinting (2026-10-17)
+
+**Start with `README_RELEASE_v2.5.0.md` before deploying.** This release requires
+new Supabase migrations (v2.2, v2.3, v2.4, v2.5 in order) and a separate,
+never-rotated (without re-encryption) Cloudflare `VOUCHER_ENCRYPTION_KEY` secret.
+
+**Voucher printing is PRINT ONLY.** It never resets a password. Archived
+original temporary credentials may be reprinted for selected voters or all
+until each voter changes the temporary password. Changed personal passwords
+are not recoverable, and previously issued credentials lacking a secure archive
+cannot be recreated from their password hashes. Older print-only notes in
+previous documentation do not supersede this limitation.
+
+Voter one-ballot protection is enforced by PostgreSQL's composite primary key
+on `voter_participation` and atomic ballot RPC, not by browser state.
+
+---
+
 # HOA Secure Vote — Cloudflare Free + Supabase Free
 
 A responsive HOA officer election website with two separate portals:

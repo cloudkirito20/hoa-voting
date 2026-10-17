@@ -103,6 +103,8 @@ create table if not exists public.elections (
   created_by bigint not null references public.users(id),
   opened_at timestamptz,
   closed_at timestamptz,
+  voting_starts_at timestamptz,
+  voting_ends_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

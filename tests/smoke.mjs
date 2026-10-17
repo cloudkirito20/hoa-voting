@@ -29,7 +29,10 @@ check('printVoucherSheet(vouchers)');
 assert.equal((popupHtml.match(/class="sheet"/g)||[]).length,20);
 assert.equal((popupHtml.match(/class="voucher"/g)||[]).length,159);
 assert.ok(popupHtml.includes('size:A4 portrait'));
-assert.ok(popupHtml.includes('https://hoa.test/vote'));
+assert.ok(popupHtml.includes('https://hoa-voting.casa-verde-de-banaderos.workers.dev/'));
+assert.ok(popupHtml.includes('/voting-qr.png'));
+assert.ok(popupHtml.includes('INITIAL PASSWORD'));
+assert.ok(popupHtml.includes('Change your initial password at first login'));
 
 ctx.vouchers=[{...vouchers[0],fullName:'<script>alert(1)</script>'}];
 check('printVoucherSheet(vouchers)');

@@ -18,14 +18,67 @@ export default {
         return json({ error: friendlyError(error) }, 500);
       }
     }
-    return env.ASSETS.fetch(request);
+    const assetResponse = await env.ASSETS.fetch(request);
+    const headers = new Headers(assetResponse.headers);
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("x-frame-options", "DENY");
+    headers.set("referrer-policy", "no-referrer");
+    headers.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
+    headers.set("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+    if (url.pathname === "/" || url.pathname === "/admin" || url.pathname === "/vote" || url.pathname.endsWith(".html")) {
+      headers.set("cache-control", "no-store");
+    }
+    return new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers });
+  },
+  // Cron runs each minute. Votes are rejected at the exact database deadline
+  // regardless of whether the cron has executed yet.
+  async scheduled(_controller, env) {
+    requireConfig(env);
+    await closeExpiredElections(env);
   }
 };
+
+async function closeExpiredElections(env) {
+  const { data, error } = await db(env).rpc("hoa_close_expired_elections");
+  assertDb(error);
+  return Number(data || 0);
+}
+
+function isExpiredElection(election) {
+  // A legacy open election without a deadline is not allowed to take ballots.
+  return election?.status === "open" &&
+    (!election.voting_ends_at || Date.parse(election.voting_ends_at) <= Date.now());
+}
+
+function visibleElection(election) {
+  return isExpiredElection(election) ? { ...election, status: "closed" } : election;
+}
+
+function parseDeadline(value) {
+  // Require an explicit timezone in API input (the web form converts PH time
+  // to UTC). This avoids browser/server-local timezone confusion.
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const n = Date.parse(value);
+  return Number.isFinite(n) ? new Date(n).toISOString() : null;
+}
+
+function validateTimeframe(body) {
+  const votingEndsAt = parseDeadline(body?.votingEndsAt);
+  if (!votingEndsAt || Date.parse(votingEndsAt) <= Date.now())
+    return { error: "Choose a voting deadline in the future, with a date, time, and timezone." };
+  const rawStart = body?.votingStartsAt;
+  const votingStartsAt = rawStart == null || rawStart === "" ? null : parseDeadline(rawStart);
+  if (rawStart && !votingStartsAt)
+    return { error: "Voting start must include a valid date, time, and timezone." };
+  if (votingStartsAt && Date.parse(votingStartsAt) >= Date.parse(votingEndsAt))
+    return { error: "Voting must end after its earliest opening time." };
+  return { voting_starts_at: votingStartsAt, voting_ends_at: votingEndsAt };
+}
 
 function db(env) {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.1" } }
+    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.0" } }
   });
 }
 
@@ -52,6 +105,11 @@ async function api(request, env, url) {
     if (!csrf || !timingSafeEqual(csrf, auth.csrfToken)) return json({ error: "Invalid security token." }, 403);
   }
 
+  if (path === "/api/voter/change-password" && method === "POST") return changeVoterPassword(request, env, auth);
+  if (auth.user.role === "voter" && auth.user.must_change_password) {
+    return json({ error: "You must change your initial password before using the voting portal.", code: "PASSWORD_CHANGE_REQUIRED" }, 403);
+  }
+
   if (path === "/api/voter/ballot" && method === "GET") return voterBallot(env, auth.user);
   if (path === "/api/voter/vote" && method === "POST") return submitVote(request, env, auth.user);
   if (/^\/api\/candidates\/\d+\/photo$/.test(path) && method === "GET") return candidatePhoto(env, Number(path.split("/")[3]));
@@ -64,6 +122,7 @@ async function api(request, env, url) {
   if (/^\/api\/admin\/elections\/\d+$/.test(path) && method === "GET") return getElection(env, Number(path.split("/").pop()));
   if (/^\/api\/admin\/elections\/\d+$/.test(path) && method === "DELETE") return deleteElection(request, env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/elections\/\d+\/status$/.test(path) && method === "PUT") return updateElectionStatus(request, env, auth.user, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/elections\/\d+\/schedule$/.test(path) && method === "PUT") return updateElectionSchedule(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/elections\/\d+\/positions$/.test(path) && method === "POST") return addPosition(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/positions\/\d+$/.test(path) && method === "DELETE") return deletePosition(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/positions\/\d+\/candidates$/.test(path) && method === "POST") return addCandidate(request, env, auth.user, Number(path.split("/")[4]));
@@ -74,11 +133,15 @@ async function api(request, env, url) {
   if (path === "/api/admin/voters" && method === "GET") return listVoters(env, url);
   if (path === "/api/admin/voters" && method === "POST") return createVoter(request, env, auth.user);
   if (path === "/api/admin/voters/bulk" && method === "POST") return bulkCreateVoters(request, env, auth.user);
+  if (path === "/api/admin/vouchers/reprint" && method === "POST") return reprintVouchers(request, env, auth.user);
   if (/^\/api\/admin\/voters\/\d+$/.test(path) && method === "DELETE") return deleteVoter(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/voters\/\d+\/reset-password$/.test(path) && method === "POST") return resetVoterPassword(env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/voters\/\d+\/active$/.test(path) && method === "PUT") return toggleVoter(request, env, auth.user, Number(path.split("/")[4]));
 
   if (/^\/api\/admin\/elections\/\d+\/results$/.test(path) && method === "GET") return electionResults(env, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/elections\/\d+\/dhsud-final$/.test(path) && method === "GET") return dhsudFinalElectionReport(env, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/elections\/\d+\/committee$/.test(path) && method === "GET") return getCommittee(env, Number(path.split("/")[4]));
+  if (/^\/api\/admin\/elections\/\d+\/committee$/.test(path) && method === "PUT") return saveCommittee(request, env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/elections\/\d+\/participation$/.test(path) && method === "GET") return participationReport(env, Number(path.split("/")[4]), url);
 
   return json({ error: "Not found." }, 404);
@@ -110,17 +173,17 @@ async function setupAdmin(request, env) {
   const fullName = clean(body.fullName, 100);
   const username = clean(body.username, 40);
   const password = String(body.password || "");
-  if (!fullName || username.length < 4 || password.length < 10) return json({ error: "Provide an admin name, username (4+ characters), and password (10+ characters)." }, 400);
+  if (!fullName || username.length < 4 || password.length < 10 || enc.encode(password).length > 72) return json({ error: "Provide an admin name, username (4+ characters), and password (10+ characters, at most 72 UTF-8 bytes)." }, 400);
 
-  const { error } = await sb.rpc("hoa_create_user", {
+  // PostgreSQL serializes first-admin creation using an advisory transaction
+  // lock, closing the parallel-requests race in the read-then-create flow.
+  const { error } = await sb.rpc("hoa_bootstrap_admin", {
     p_username: username,
     p_password: password,
-    p_role: "admin",
-    p_full_name: fullName,
-    p_block: null,
-    p_lot: null
+    p_full_name: fullName
   });
   if (error) {
+    if (/already configured/i.test(error.message || "")) return json({ error: "Administrator is already configured." }, 409);
     if (isUnique(error)) return json({ error: "That administrator username is already in use." }, 409);
     assertDb(error);
   }
@@ -159,6 +222,13 @@ async function login(request, env) {
   }
 
   await sb.from("login_attempts").delete().eq("ip", ip).eq("username", usernameKey);
+  // hoa_verify_login was deployed before the new flag existed; read it from the
+  // canonical user row rather than changing a PostgREST RETURNS TABLE signature.
+  if (user.role === "voter") {
+    const flag = await sb.from("users").select("must_change_password").eq("id", user.id).single();
+    assertDb(flag.error);
+    user.must_change_password = Boolean(flag.data?.must_change_password);
+  }
 
   // Voters may have only one active session at a time. Clean up expired sessions first,
   // then perform a friendly pre-check. PostgreSQL also enforces this rule with a trigger
@@ -212,6 +282,49 @@ async function getMe(request, env) {
   return json({ user: publicUser(auth.user), csrfToken: auth.csrfToken });
 }
 
+async function changeVoterPassword(request, env, auth) {
+  if (auth.user.role !== "voter") return json({ error: "Voter account required." }, 403);
+  const body = await readJson(request);
+  const currentPassword = String(body?.currentPassword ?? "");
+  const newPassword = String(body?.newPassword ?? "");
+  if (!currentPassword || newPassword.length < 12 || enc.encode(newPassword).length > 72)
+    return json({ error: "Enter your current password and a new password of at least 12 characters and at most 72 UTF-8 bytes." }, 400);
+  if (currentPassword === newPassword)
+    return json({ error: "Your new password must differ from your current password." }, 400);
+
+  const sb = db(env);
+  // Reuse the existing login-attempts table to slow online guesses even if a
+  // valid session is stolen. Both checks happen server-side, not in the form.
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const attemptUser = `pwchange:${auth.user.id}`;
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const limits = await sb.from("login_attempts").select("id", { count: "exact", head: true })
+    .eq("username", attemptUser).gte("attempted_at", cutoff);
+  assertDb(limits.error);
+  if (Number(limits.count || 0) >= 8)
+    return json({ error: "Too many password-change attempts. Wait 15 minutes and try again." }, 429);
+
+  const result = await sb.rpc("hoa_change_own_password", {
+    p_user_id: auth.user.id,
+    p_current_password: currentPassword,
+    p_new_password: newPassword
+  });
+  if (result.error) {
+    const message = String(result.error.message || "");
+    if (/current password is incorrect/i.test(message)) {
+      const attempt = await sb.from("login_attempts").insert({ ip, username: attemptUser });
+      assertDb(attempt.error);
+      return json({ error: "Current password is incorrect." }, 401);
+    }
+    if (/new password|password must/i.test(message)) return json({ error: message }, 400);
+    assertDb(result.error);
+  }
+  // SQL invalidates every voter session within the password-change transaction.
+  const headers = secureJsonHeaders();
+  headers.append("set-cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+  return new Response(JSON.stringify({ ok: true, signedOut: true, message: "Password updated. Sign in again using your new password." }), { headers });
+}
+
 async function authenticate(request, env) {
   const token = getCookie(request, SESSION_COOKIE);
   if (!token) return null;
@@ -223,7 +336,7 @@ async function authenticate(request, env) {
     if (session) await sb.from("sessions").delete().eq("token_hash", tokenHash);
     return null;
   }
-  const { data: user, error: userError } = await sb.from("users").select("id,username,role,full_name,block,lot,active").eq("id", session.user_id).maybeSingle();
+  const { data: user, error: userError } = await sb.from("users").select("id,username,role,full_name,block,lot,active,must_change_password").eq("id", session.user_id).maybeSingle();
   assertDb(userError);
   if (!user?.active) {
     await sb.from("sessions").delete().eq("token_hash", tokenHash);
@@ -237,7 +350,7 @@ async function adminOverview(env) {
   const [votersR, electionsR, openR, participationR] = await Promise.all([
     sb.from("users").select("id", { count: "exact", head: true }).eq("role", "voter").eq("active", true),
     sb.from("elections").select("id", { count: "exact", head: true }),
-    sb.from("elections").select("id", { count: "exact", head: true }).eq("status", "open"),
+    sb.from("elections").select("id", { count: "exact", head: true }).eq("status", "open").gt("voting_ends_at", new Date().toISOString()),
     sb.from("voter_participation").select("user_id")
   ]);
   [votersR, electionsR, openR, participationR].forEach(r => assertDb(r.error));
@@ -259,7 +372,7 @@ async function listElections(env) {
   [error, pError, bError].forEach(assertDb);
   const pCounts = countBy(positions || [], "election_id");
   const bCounts = countBy(ballots || [], "election_id");
-  return json({ elections: (elections || []).map(e => ({ ...e, position_count: pCounts.get(String(e.id)) || 0, ballots: bCounts.get(String(e.id)) || 0 })) });
+  return json({ elections: (elections || []).map(e => ({ ...visibleElection(e), position_count: pCounts.get(String(e.id)) || 0, ballots: bCounts.get(String(e.id)) || 0 })) });
 }
 
 async function createElection(request, env, admin) {
@@ -268,9 +381,11 @@ async function createElection(request, env, admin) {
   const title = clean(body?.title, 120);
   const description = clean(body?.description, 500);
   if (!title) return json({ error: "Election title is required." }, 400);
-  const { data, error } = await sb.from("elections").insert({ title, description: description || null, created_by: admin.id }).select("id").single();
+  const schedule = validateTimeframe(body);
+  if (schedule.error) return json({ error: schedule.error }, 400);
+  const { data, error } = await sb.from("elections").insert({ title, description: description || null, created_by: admin.id, ...schedule }).select("id").single();
   assertDb(error);
-  await audit(env, admin.id, "election.create", "election", data.id, { title });
+  await audit(env, admin.id, "election.create", "election", data.id, { title, ...schedule });
   return json({ ok: true, id: data.id }, 201);
 }
 
@@ -315,7 +430,7 @@ async function getElection(env, electionId) {
     assertDb(r.error); candidates = (r.data || []).map(publicCandidate);
   }
   for (const p of positions || []) p.candidates = candidates.filter(c => Number(c.position_id) === Number(p.id));
-  return json({ election, positions: positions || [] });
+  return json({ election: visibleElection(election), positions: positions || [] });
 }
 
 async function updateElectionStatus(request, env, admin, electionId) {
@@ -330,6 +445,13 @@ async function updateElectionStatus(request, env, admin, electionId) {
   if (election.status === "open" && status === "draft") return json({ error: "An election cannot return to Draft after voting has opened." }, 409);
   if (status === "open") {
     if (election.status === "closed") return json({ error: "A closed election cannot be reopened." }, 409);
+    if (!election.voting_ends_at || Date.parse(election.voting_ends_at) <= Date.now())
+      return json({ error: "Set a future voting deadline before opening this election." }, 409);
+    if (election.voting_starts_at && Date.parse(election.voting_starts_at) > Date.now())
+      return json({ error: "The configured earliest voting start time has not arrived." }, 409);
+    // Release the one-open-election constraint when another election reached
+    // its deadline but Cron has not materialized its Closed status yet.
+    await closeExpiredElections(env);
     const other = await sb.from("elections").select("id").eq("status", "open").neq("id", electionId).limit(1);
     assertDb(other.error);
     if (other.data?.length) return json({ error: "Another election is already open. Close it before opening this election." }, 409);
@@ -348,14 +470,34 @@ async function updateElectionStatus(request, env, admin, electionId) {
   }
   const patch = { status, updated_at: new Date().toISOString() };
   if (status === "open" && !election.opened_at) patch.opened_at = new Date().toISOString();
-  if (status === "closed") patch.closed_at = new Date().toISOString();
+  if (status === "closed") patch.closed_at = election.voting_ends_at ? new Date(Math.min(Date.now(), Date.parse(election.voting_ends_at))).toISOString() : new Date().toISOString();
   const { error: updateError } = await sb.from("elections").update(patch).eq("id", electionId);
   if (updateError) {
     if (isUnique(updateError)) return json({ error: "Another election is already open." }, 409);
+    if (/deadline|opening time|time frame|reopen/i.test(updateError.message || "")) return json({ error: updateError.message }, 409);
     assertDb(updateError);
   }
   await audit(env, admin.id, "election.status", "election", electionId, { from: election.status, to: status });
   return json({ ok: true });
+}
+
+// Schedule is immutable after voting first opens, even when a closed election
+// has no ballots. PostgreSQL enforces the same rule on direct SQL/API writes.
+async function updateElectionSchedule(request, env, admin, electionId) {
+  const sb = db(env);
+  const { data: election, error } = await sb.from("elections")
+    .select("id,status").eq("id", electionId).maybeSingle();
+  assertDb(error);
+  if (!election) return json({ error: "Election not found." }, 404);
+  if (election.status !== "draft") return json({ error: "Voting dates cannot change after an election opens." }, 409);
+  const schedule = validateTimeframe(await readJson(request));
+  if (schedule.error) return json({ error: schedule.error }, 400);
+  const { data, error: updateError } = await sb.from("elections").update(schedule)
+    .eq("id", electionId).eq("status", "draft").select("id").maybeSingle();
+  if (updateError) assertDb(updateError);
+  if (!data) return json({ error: "Election schedule was locked. Refresh and try again." }, 409);
+  await audit(env, admin.id, "election.schedule", "election", electionId, schedule);
+  return json({ ok: true, ...schedule });
 }
 
 async function addPosition(request, env, admin, electionId) {
@@ -541,11 +683,137 @@ async function candidatePhoto(env, candidateId) {
   return new Response(data, { status: 200, headers });
 }
 
+// AES-GCM protects PRINTABLE INITIAL VOUCHERS only. The key remains outside
+// Supabase, in Cloudflare's VOUCHER_ENCRYPTION_KEY secret. Reprints do not call
+// any password-reset RPC or modify the stored password hash.
+const VOUCHER_URL = "https://hoa-voting.casa-verde-de-banaderos.workers.dev/";
+function voucherKeyBytes(env) {
+  const hex = String(env.VOUCHER_ENCRYPTION_KEY || "").trim();
+  if (!/^[a-f0-9]{64}$/i.test(hex)) {
+    throw new Error("VOUCHER_ENCRYPTION_KEY is not configured. Add a unique 32-byte (64-hex-character) key to the Production Worker secrets before issuing vouchers.");
+  }
+  return Uint8Array.from(hex.match(/.{2}/g), x => parseInt(x, 16));
+}
+function bytesHex(bytes) { return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""); }
+function hexBytes(hex) { return Uint8Array.from(hex.match(/.{2}/g) || [], x => parseInt(x, 16)); }
+async function voucherCryptoKey(env) {
+  return crypto.subtle.importKey("raw", voucherKeyBytes(env), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+async function archiveVoucher(env, username, password) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce,
+    additionalData: enc.encode("HOA-VOUCHER-v1:" + username) }, await voucherCryptoKey(env), enc.encode(password));
+  return { voucherNonce: bytesHex(nonce), voucherCiphertext: bytesHex(new Uint8Array(ciphertext)) };
+}
+async function recoverVoucher(env, username, nonceHex, ciphertextHex) {
+  const result = await crypto.subtle.decrypt({ name: "AES-GCM", iv: hexBytes(nonceHex),
+    additionalData: enc.encode("HOA-VOUCHER-v1:" + username) }, await voucherCryptoKey(env), hexBytes(ciphertextHex));
+  return new TextDecoder().decode(result);
+}
+// Re-enter the administrator's password before revealing encrypted credentials.
+// This prevents a left-open admin page from silently printing every password.
+async function verifyAdminReprintPassword(sb, admin, password) {
+  if (!password || password.length > 256) return false;
+  const r = await sb.rpc("hoa_verify_login", { p_username: admin.username, p_password: password });
+  assertDb(r.error);
+  return (r.data || []).some(x => Number(x.id) === Number(admin.id) && x.role === "admin");
+}
+async function reprintVouchers(request, env, admin) {
+  // The Print/Reprint endpoint never generates or resets a password.
+  const body = await readJson(request);
+  const password = String(body?.adminPassword || "");
+  const sb = db(env);
+  const now = new Date().toISOString();
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const rateName = `voucher-reprint:${admin.id}`;
+  const rate = await sb.from("login_attempts").select("id", { count: "exact", head: true })
+    .eq("ip", ip).eq("username", rateName)
+    .gte("attempted_at", new Date(Date.now() - 15 * 60 * 1000).toISOString());
+  assertDb(rate.error);
+  if (Number(rate.count || 0) >= 5) return json({ error: "Too many failed reprint authorizations. Try again in 15 minutes." }, 429);
+  if (!await verifyAdminReprintPassword(sb, admin, password)) {
+    const fail = await sb.from("login_attempts").insert({ ip, username: rateName, attempted_at: now });
+    assertDb(fail.error);
+    return json({ error: "Re-enter your administrator password to reprint vouchers." }, 403);
+  }
+  await sb.from("login_attempts").delete().eq("ip", ip).eq("username", rateName);
+  const isAll = body?.all === true;
+  const selected = body?.voterIds;
+  if (!isAll && (!Array.isArray(selected) || !selected.length || selected.length > 500 ||
+    selected.some(n => !Number.isSafeInteger(n) || n <= 0) || new Set(selected).size !== selected.length))
+    return json({ error: "Select 1 to 500 distinct voter accounts." }, 400);
+  const usersQuery = sb.from("users").select("id,username,full_name,block,lot,must_change_password,active")
+    .eq("role", "voter").order("id", { ascending: true }).limit(501);
+  const userResult = isAll ? await usersQuery : await usersQuery.in("id", selected);
+  assertDb(userResult.error);
+  const users = userResult.data || [];
+  if (users.length > 500) return json({ error: "More than 500 voters are registered. Print in smaller selected batches." }, 400);
+  if (!isAll && users.length !== selected.length) return json({ error: "Some selected voters no longer exist." }, 404);
+  const eligible = users.filter(x => x.active && x.must_change_password);
+  const result = eligible.length ? await sb.from("voter_vouchers")
+    .select("voter_id,nonce_hex,ciphertext_hex").in("voter_id", eligible.map(x => x.id)) : { data: [], error: null };
+  assertDb(result.error);
+  const archives = new Map((result.data || []).map(x => [Number(x.voter_id), x]));
+  const vouchers = [];
+  const skipped = [];
+  for (const user of users) {
+    const row = archives.get(Number(user.id));
+    if (!user.active || !user.must_change_password || !row) {
+      skipped.push({ id: user.id, username: user.username,
+        reason: !user.active ? "Account disabled" : !user.must_change_password ? "Voter changed their initial password" : "No recoverable original voucher (issued before archive)" });
+      continue;
+    }
+    let plaintext;
+    try { plaintext = await recoverVoucher(env, user.username, row.nonce_hex, row.ciphertext_hex); }
+    catch { return json({ error: "Encrypted voucher could not be opened. Check that the original VOUCHER_ENCRYPTION_KEY is still configured; no passwords were changed." }, 503); }
+    vouchers.push({ id: user.id, username: user.username, password: plaintext,
+      fullName: user.full_name, block: user.block, lot: user.lot });
+  }
+  // Fail closed if disclosure cannot be independently audited. NEVER log secrets.
+  const auditR = await sb.from("audit_log").insert({ admin_user_id: admin.id,
+    action: "voter.voucher_reprint", entity_type: "voter", entity_id: "selected",
+    details: { count: vouchers.length, voterIds: vouchers.map(x => x.id),
+      skipped: skipped.map(x => x.id), all: isAll } });
+  assertDb(auditR.error);
+  return json({ ok: true, portal: VOUCHER_URL, voters: vouchers, skipped, passwordsUnchanged: true });
+}
+
+async function getCommittee(env, electionId) {
+  const sb = db(env);
+  const r = await sb.from("election_committee_members")
+    .select("id,full_name,committee_role,display_order").eq("election_id", electionId)
+    .order("display_order", { ascending: true });
+  assertDb(r.error);
+  return json({ members: (r.data || []).map(x => ({ id: x.id, fullName: x.full_name, role: x.committee_role })) });
+}
+async function saveCommittee(request, env, admin, electionId) {
+  const data = await readJson(request);
+  if (!Array.isArray(data?.members) || data.members.length > 12)
+    return json({ error: "Provide up to 12 Election Committee names." }, 400);
+  const allowedRoles = new Set(["Chairperson", "Vice Chairperson", "Secretary", "Member", "Canvasser"]);
+  const members = data.members.map(x => ({ fullName: clean(x?.fullName, 100), role: String(x?.role || "") }));
+  if (members.some(x => x.fullName.length < 2 || !allowedRoles.has(x.role)))
+    return json({ error: "Invalid Election Committee name or role." }, 400);
+  if (members.filter(x => x.role === "Chairperson").length > 1)
+    return json({ error: "Only one Chairperson is allowed." }, 400);
+  const sb = db(env);
+  const r = await sb.rpc("hoa_replace_election_committee", { p_election_id: electionId, p_members: members });
+  if (r.error && /committee cannot change|election not found/i.test(r.error.message || ""))
+    return json({ error: r.error.message }, 409);
+  assertDb(r.error);
+  await audit(env, admin.id, "election.committee_update", "election", electionId,
+    { count: members.length, members });
+  return json({ ok: true, count: Number(r.data || 0) });
+}
+
 async function listVoters(env, url) {
   const sb = db(env);
   const search = clean(url.searchParams.get("search"), 80).toLowerCase();
   const electionId = Number(url.searchParams.get("electionId") || 0);
-  const { data: voters, error } = await sb.from("users").select("id,username,full_name,block,lot,active,created_at").eq("role", "voter");
+  const { data: voters, error } = await sb.from("users").select("id,username,full_name,block,lot,active,must_change_password,created_at").eq("role", "voter");
+  const archived = await sb.from("voter_vouchers").select("voter_id").limit(1000);
+  assertDb(archived.error);
+  const archiveIds = new Set((archived.data || []).map(x => Number(x.voter_id)));
   assertDb(error);
   let participation = [];
   if (electionId) {
@@ -553,7 +821,9 @@ async function listVoters(env, url) {
     assertDb(r.error); participation = r.data || [];
   }
   const pMap = new Map(participation.map(p => [String(p.user_id), p]));
-  let rows = (voters || []).map(v => ({ ...v, voted: pMap.has(String(v.id)), voted_at: pMap.get(String(v.id))?.voted_at || null }));
+  let rows = (voters || []).map(v => ({ ...v,
+    voucherAvailable: Boolean(v.active && v.must_change_password && archiveIds.has(Number(v.id))),
+    voted: pMap.has(String(v.id)), voted_at: pMap.get(String(v.id))?.voted_at || null }));
   if (search) rows = rows.filter(v => [v.full_name, v.username, v.block, v.lot].some(x => String(x || "").toLowerCase().includes(search)));
   rows.sort(voterSort);
   return json({ voters: rows });
@@ -568,6 +838,11 @@ async function createVoter(request, env, admin) {
   if (!fullName || !block || !lot) return json({ error: "Full name, block, and lot are required." }, 400);
   const lock = await voterRegistrationLock(sb);
   if (lock) return lock;
+  const { data: existingOwners, error: ownersError } = await sb.from("users")
+    .select("id,full_name").eq("role", "voter");
+  assertDb(ownersError);
+  if ((existingOwners || []).some(u => normalizedOwnerName(u.full_name) === normalizedOwnerName(fullName)))
+    return json({ error: "A voting account already exists for this homeowner. Link additional lots to the existing account instead." }, 409);
 
   let username = null;
   for (let i = 0; i < 12; i++) {
@@ -579,16 +854,14 @@ async function createVoter(request, env, admin) {
   if (!username) return json({ error: "Could not generate a unique username. Try again." }, 500);
 
   const password = strongVoterPassword();
-  const { data: id, error } = await sb.rpc("hoa_create_user", {
-    p_username: username,
-    p_password: password,
-    p_role: "voter",
-    p_full_name: fullName,
-    p_block: block,
-    p_lot: lot
+  const archive = await archiveVoucher(env, username, password);
+  const { data: id, error } = await sb.rpc("hoa_create_voter_with_voucher", {
+    p_username: username, p_password: password, p_full_name: fullName,
+    p_block: block, p_lot: lot, p_ciphertext_hex: archive.voucherCiphertext,
+    p_nonce_hex: archive.voucherNonce
   });
   if (error) {
-    if (isUnique(error)) return json({ error: "This Block/Lot already has a voter account, or a username collision occurred." }, 409);
+    if (isUnique(error)) return json({ error: "This Block/Lot, homeowner, or username already has a voter account." }, 409);
     if (/registration is locked while an election is open/i.test(error.message || "")) return json({ error: "Voter registration is locked while an election is open." }, 409);
     assertDb(error);
   }
@@ -604,6 +877,10 @@ async function voterRegistrationLock(sb) {
   return data?.length ? json({ error: "Voter registration is locked while an election is open." }, 409) : null;
 }
 
+function normalizedOwnerName(value) {
+  return clean(value, 100).replace(/\s+/g, " ").toLocaleLowerCase("en");
+}
+
 function canonicalUnit(value) {
   const v = clean(value, 40);
   return /^0*[0-9]+$/.test(v) ? v.replace(/^0+(?=\d)/, "") : v;
@@ -616,6 +893,7 @@ async function bulkCreateVoters(request, env, admin) {
     return json({ error: "Send 1 to 20 verified voters per batch." }, 400);
   const batch = [];
   const units = new Set();
+  const owners = new Set();
   for (const row of rows) {
     const fullName = clean(row?.fullName, 100);
     const block = canonicalUnit(row?.block);
@@ -624,6 +902,9 @@ async function bulkCreateVoters(request, env, admin) {
     const key = `${block.toLowerCase()}|${lot.toLowerCase()}`;
     if (units.has(key)) return json({ error: `Repeated Block/Lot in batch: ${block}/${lot}.` }, 409);
     units.add(key);
+    const ownerKey = normalizedOwnerName(fullName);
+    if (owners.has(ownerKey)) return json({ error: `Homeowner appears more than once in the same batch: ${fullName}. One account per homeowner is required.` }, 409);
+    owners.add(ownerKey);
     batch.push({ fullName, block, lot,
       username: `HOA-${randomFromAlphabet(8, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789")}`,
       password: strongVoterPassword() });
@@ -631,9 +912,10 @@ async function bulkCreateVoters(request, env, admin) {
   const sb = db(env);
   const lock = await voterRegistrationLock(sb);
   if (lock) return lock;
-  const { data, error } = await sb.rpc("hoa_bulk_create_voters", { p_voters: batch });
+  for (const voter of batch) Object.assign(voter, await archiveVoucher(env, voter.username, voter.password));
+  const { data, error } = await sb.rpc("hoa_bulk_create_voters_with_vouchers", { p_voters: batch });
   if (error) {
-    if (isUnique(error)) return json({ error: "One or more Block/Lot accounts already exist. Refresh the list and retry with only unregistered units." }, 409);
+    if (isUnique(error)) return json({ error: "A voter account already exists for one or more homeowners or units. Refresh the list and reconcile before retrying." }, 409);
     if (/registration is locked while an election is open/i.test(error.message || "")) return json({ error: "Voter registration is locked while an election is open." }, 409);
     assertDb(error);
   }
@@ -709,11 +991,17 @@ async function deleteVoter(env, admin, voterId) {
 
 async function resetVoterPassword(env, admin, voterId) {
   const sb = db(env);
+  const lock = await voterRegistrationLock(sb);
+  if (lock) return lock;
   const { data: voter, error } = await sb.from("users").select("id,username,full_name,block,lot").eq("id", voterId).eq("role", "voter").maybeSingle();
   assertDb(error);
   if (!voter) return json({ error: "Voter not found." }, 404);
   const password = strongVoterPassword();
-  const r = await sb.rpc("hoa_reset_password", { p_user_id: voterId, p_password: password });
+  const archive = await archiveVoucher(env, voter.username, password);
+  const r = await sb.rpc("hoa_reset_password_with_voucher", {
+    p_user_id: voterId, p_password: password,
+    p_ciphertext_hex: archive.voucherCiphertext, p_nonce_hex: archive.voucherNonce
+  });
   assertDb(r.error);
   if (!r.data) return json({ error: "Voter not found." }, 404);
   await audit(env, admin.id, "voter.password_reset", "user", voterId, { username: voter.username });
@@ -724,7 +1012,10 @@ async function toggleVoter(request, env, admin, voterId) {
   const sb = db(env);
   const body = await readJson(request);
   const active = Boolean(body?.active);
-  if (active) { const lock = await voterRegistrationLock(sb); if (lock) return lock; }
+  // Freeze all admin-initiated account/status changes during live voting.
+  // Otherwise an administrator could change credentials and impersonate a voter.
+  const lock = await voterRegistrationLock(sb);
+  if (lock) return lock;
   const { data: voter, error } = await sb.from("users").select("id,username").eq("id", voterId).eq("role", "voter").maybeSingle();
   assertDb(error);
   if (!voter) return json({ error: "Voter not found." }, 404);
@@ -738,10 +1029,26 @@ async function toggleVoter(request, env, admin, voterId) {
 async function voterBallot(env, user) {
   if (user.role !== "voter") return json({ error: "Voter account required." }, 403);
   const sb = db(env);
-  const { data: elections, error } = await sb.from("elections").select("*").eq("status", "open").order("opened_at", { ascending: false }).order("id", { ascending: false }).limit(1);
+  const { data: elections, error } = await sb.from("elections").select("*").eq("status", "open")
+    .gt("voting_ends_at", new Date().toISOString())
+    .order("opened_at", { ascending: false }).order("id", { ascending: false }).limit(1);
   assertDb(error);
   const election = elections?.[0];
-  if (!election) return json({ election: null, message: "There is no open election right now." });
+  if (!election) {
+    // Let someone who voted retrieve their receipt after the polls close,
+    // without providing ballot choices or offering a new ballot.
+    const { data: parts, error: pError } = await sb.from("voter_participation")
+      .select("election_id,voted_at,receipt_code").eq("user_id", user.id)
+      .order("voted_at", { ascending: false }).limit(1);
+    assertDb(pError);
+    if (parts?.length) {
+      const { data: last, error: eError } = await sb.from("elections")
+        .select("*").eq("id", parts[0].election_id).maybeSingle();
+      assertDb(eError);
+      if (last) return json({ election: publicElection(visibleElection(last)), voted: true, votedAt: parts[0].voted_at, receiptCode: parts[0].receipt_code });
+    }
+    return json({ election: null, message: "There is no election accepting ballots right now. Voting closes automatically at its published deadline." });
+  }
   const { data: participation, error: pError } = await sb.from("voter_participation").select("voted_at,receipt_code").eq("user_id", user.id).eq("election_id", election.id).maybeSingle();
   assertDb(pError);
   if (participation) return json({ election: publicElection(election), voted: true, votedAt: participation.voted_at, receiptCode: participation.receipt_code });
@@ -758,9 +1065,10 @@ async function submitVote(request, env, user) {
 
   // Fast friendly validation in the Worker; PostgreSQL repeats all critical checks atomically.
   const sb = db(env);
-  const { data: election, error } = await sb.from("elections").select("id,status").eq("id", electionId).eq("status", "open").maybeSingle();
+  const { data: election, error } = await sb.from("elections").select("id,status,voting_ends_at").eq("id", electionId).eq("status", "open").maybeSingle();
   assertDb(error);
-  if (!election) return json({ error: "This election is not open." }, 409);
+  if (!election || !election.voting_ends_at || Date.parse(election.voting_ends_at) <= Date.now())
+    return json({ error: "Voting has closed: the election deadline has passed or the polls are not open." }, 409);
   const detail = await getElectionData(env, electionId);
   const positions = new Map(detail.positions.map(p => [String(p.id), p]));
   const candidateToPosition = new Map();
@@ -788,26 +1096,28 @@ async function submitVote(request, env, user) {
   if (voteError) {
     const msg = voteError.message || "Vote submission failed.";
     if (/already submitted/i.test(msg)) return json({ error: "This voter account has already submitted a ballot." }, 409);
-    if (/not open/i.test(msg)) return json({ error: "This election is not open." }, 409);
+    if (/not open|deadline|closed|voting period/i.test(msg)) return json({ error: "Voting is closed or the election deadline has passed." }, 409);
     if (/invalid|too many|select at least/i.test(msg)) return json({ error: msg.replace(/^.*?:\s*/, "") }, 400);
     assertDb(voteError);
   }
   return json({ ok: true, receiptCode: data || receiptCode });
 }
 
-async function electionResults(env, electionId) {
+// Final reports are built from server-owned election data. The browser sends
+// no vote totals and cannot override ranks or the election cutoff.
+async function buildElectionResults(env, electionId) {
   const sb = db(env);
   const { data: election, error } = await sb.from("elections").select("*").eq("id", electionId).maybeSingle();
   assertDb(error);
-  if (!election) return json({ error: "Election not found." }, 404);
-
-  const [{ count: eligible, error: eError }, { count: ballotsCast, error: tError }, detail, votesR] = await Promise.all([
+  if (!election) return null;
+  const [{ count: currentActive, error: eError }, { count: ballotsCast, error: tError }, { count: anonymousBallots, error: bError }, detail, votesR] = await Promise.all([
     sb.from("users").select("id", { count: "exact", head: true }).eq("role", "voter").eq("active", true),
     sb.from("voter_participation").select("user_id", { count: "exact", head: true }).eq("election_id", electionId),
+    sb.from("ballots").select("id", { count: "exact", head: true }).eq("election_id", electionId),
     getElectionData(env, electionId),
     sb.rpc("hoa_candidate_vote_totals", { p_election_id: electionId })
   ]);
-  assertDb(eError); assertDb(tError); assertDb(votesR.error);
+  assertDb(eError); assertDb(tError); assertDb(bError); assertDb(votesR.error);
   const voteCounts = new Map((votesR.data || []).map(x => [String(x.candidate_id), Number(x.votes || 0)]));
   for (const p of detail.positions) {
     let totalVotes = 0;
@@ -819,9 +1129,91 @@ async function electionResults(env, electionId) {
     p.totalVotes = totalVotes;
     p.candidates = candidates.map(c => ({ ...c, percentage: totalVotes ? Number(((c.votes / totalVotes) * 100).toFixed(1)) : 0 }));
   }
-  const eligibleVoters = Number(eligible || 0);
+  // A snapshot captured automatically by PostgreSQL at Draft -> Open is
+  // preferable to counting active accounts after the election has finished.
+  const atOpening = Number.isInteger(election.eligible_voters_at_open) ? election.eligible_voters_at_open : null;
+  const eligibleVoters = atOpening ?? Number(currentActive || 0);
   const cast = Number(ballotsCast || 0);
-  return json({ election, eligibleVoters, ballotsCast: cast, turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(1)) : 0, positions: detail.positions });
+  const ballotRows = Number(anonymousBallots || 0);
+  return {
+    election: visibleElection(election),
+    eligibleVoters,
+    eligibilitySource: atOpening === null ? "current_active_unverified" : "captured_at_open",
+    ballotsCast: cast,
+    anonymousBallots: ballotRows,
+    ballotRecordCountMatches: cast === ballotRows,
+    turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(1)) : 0,
+    positions: detail.positions
+  };
+}
+
+async function electionResults(env, electionId) {
+  const d = await buildElectionResults(env, electionId);
+  return d ? json(d) : json({ error: "Election not found." }, 404);
+}
+
+// Competition-style ranks (1, 1, 3). A tie across the seat cutoff is NEVER
+// auto-proclaimed; ELECOM must document its resolution under HOA rules.
+function rankElectionPosition(position) {
+  const candidates = [...position.candidates].sort((a,b) => b.votes-a.votes || a.full_name.localeCompare(b.full_name));
+  const seats = Math.max(1, Number(position.seats || 1));
+  const cutoff = candidates.length >= seats ? candidates[seats-1].votes : null;
+  const above = cutoff === null ? 0 : candidates.filter(c => c.votes > cutoff).length;
+  const onBoundary = cutoff === null ? 0 : candidates.filter(c => c.votes === cutoff).length;
+  const boundaryTie = cutoff !== null && onBoundary > seats - above;
+  let prevVotes = null;
+  let prevRank = 0;
+  const rows = candidates.map((candidate, index) => {
+    const rank = candidate.votes === prevVotes ? prevRank : index + 1;
+    prevVotes = candidate.votes;
+    prevRank = rank;
+    let result = "Outside seat allocation";
+    if (index < seats || (boundaryTie && cutoff !== null && candidate.votes === cutoff)) {
+      result = boundaryTie && candidate.votes === cutoff
+        ? "TIE - ELECOM decision required"
+        : "Within available seats - provisional";
+    }
+    return { candidateId: candidate.id, candidateName: candidate.full_name,
+      votes: Number(candidate.votes || 0), rank, result };
+  });
+  return { title: position.title, seats, totalSelections: Number(position.totalVotes || 0),
+    cutoffTie: boundaryTie, rows };
+}
+
+async function dhsudFinalElectionReport(env, electionId) {
+  const data = await buildElectionResults(env, electionId);
+  if (!data) return json({ error: "Election not found." }, 404);
+  if (data.election.status !== "closed") return json({ error: "Final DHSUD-aligned exports are available only after the election closes." }, 409);
+  const election = data.election;
+  const positions = data.positions.map(rankElectionPosition);
+  const roster = await db(env).from("election_committee_members")
+    .select("full_name,committee_role,display_order")
+    .eq("election_id", electionId).order("display_order", { ascending: true });
+  assertDb(roster.error);
+  return json({
+    reportKind: "DHSUD-aligned ELECOM election report and tally (not a government-issued form)",
+    sourceReference: "2024 Revised IRR of RA 9904, Section 101 (DHSUD Department Circular 2024-018)",
+    associationName: "Casa Verde de Bañaderos",
+    election: { id: election.id, title: election.title, status: "closed",
+      votingStartsAt: election.voting_starts_at || null,
+      votingEndsAt: election.voting_ends_at || null,
+      openedAt: election.opened_at || null,
+      closedAt: election.closed_at || election.voting_ends_at || null },
+    eligibleVoters: data.eligibleVoters,
+    eligibleCountBasis: data.eligibilitySource === "captured_at_open"
+      ? "Active voter accounts at the time the polls opened; ELECOM must verify the certified qualified-voter list."
+      : "Active voter accounts at export only (legacy election lacks opening snapshot); ELECOM verification required.",
+    verifiedOpeningSnapshot: data.eligibilitySource === "captured_at_open",
+    ballotsCast: data.ballotsCast,
+    anonymousBallots: data.anonymousBallots,
+    voteRecordIntegrityOk: data.ballotRecordCountMatches,
+    turnoutPercentage: data.turnoutPercentage,
+    hasUnresolvedSeatTies: positions.some(p => p.cutoffTie),
+    positions,
+    committeeMembers: (roster.data || []).map(x => ({ fullName: x.full_name, role: x.committee_role })),
+    exportGeneratedAt: new Date().toISOString(),
+    certificateState: "Uncertified system tabulation - requires ELECOM review, signatures and any notarization required by DHSUD."
+  });
 }
 
 async function participationReport(env, electionId, url) {
@@ -876,9 +1268,10 @@ async function audit(env, adminId, action, entityType, entityId, details) {
 }
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, role: u.role, fullName: u.full_name, block: u.block, lot: u.lot };
+  return { id: u.id, username: u.username, role: u.role, fullName: u.full_name, block: u.block, lot: u.lot, mustChangePassword: u.role === "voter" && Boolean(u.must_change_password) };
 }
-function publicElection(e) { return { id: e.id, title: e.title, description: e.description, status: e.status, openedAt: e.opened_at }; }
+function publicElection(e) {   return { id: e.id, title: e.title, description: e.description, status: visibleElection(e).status,
+    openedAt: e.opened_at, votingStartsAt: e.voting_starts_at, votingEndsAt: e.voting_ends_at }; }
 function publicCandidate(c) {
   const { photo_path, ...rest } = c;
   return { ...rest, has_photo: Boolean(photo_path) };
@@ -1019,6 +1412,27 @@ function secureInt(max) { const arr = new Uint32Array(1); const limit = Math.flo
 function timingSafeEqual(a,b) { a=String(a||""); b=String(b||""); if (a.length !== b.length) return false; let diff=0; for(let i=0;i<a.length;i++) diff |= a.charCodeAt(i)^b.charCodeAt(i); return diff===0; }
 function clean(value, max=200) { return String(value ?? "").trim().replace(/[\u0000-\u001F\u007F]/g, "").slice(0,max); }
 function getCookie(request, name) { const cookie=request.headers.get("cookie")||""; for(const p of cookie.split(";")){ const [k,...rest]=p.trim().split("="); if(k===name) return rest.join("="); } return null; }
-async function readJson(request) { try { return await request.json(); } catch { return null; } }
+async function readJson(request, maxBytes = 256 * 1024) {
+  // Limit request bodies even when the client omits Content-Length. This avoids
+  // asking the Worker to buffer and parse arbitrarily large JSON payloads.
+  const declared = Number(request.headers.get("content-length") || 0);
+  if (declared > maxBytes || !request.body) return null;
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+    const buffer = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.byteLength; }
+    return JSON.parse(new TextDecoder().decode(buffer));
+  } catch { return null; }
+}
 function secureJsonHeaders() { return new Headers({ "content-type":"application/json; charset=utf-8", "cache-control":"no-store", "x-content-type-options":"nosniff", "referrer-policy":"no-referrer", "permissions-policy":"camera=(), microphone=(), geolocation=()", "content-security-policy":"default-src 'none'; frame-ancestors 'none'" }); }
 function json(data, status=200) { return new Response(JSON.stringify(data), { status, headers: secureJsonHeaders() }); }

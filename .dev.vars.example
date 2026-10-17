@@ -1,3 +1,6 @@
 SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
 SUPABASE_SECRET_KEY="sb_secret_REPLACE_ME"
 SETUP_TOKEN="replace-with-a-long-random-private-setup-token"
+
+# Required from v2.5 for encrypted print-only reissues. Generate 32 random bytes (64 hex chars).
+VOUCHER_ENCRYPTION_KEY="REPLACE_WITH_INDEPENDENT_64_HEX_CHARACTER_RANDOM_KEY"
