@@ -61,3 +61,12 @@ button,input,textarea,select{font:inherit} button{cursor:pointer} a{color:inheri
 .bulk-issued{border:1px solid #73b9ad;background:#effaf6;border-radius:13px;padding:13px 16px;margin:14px 0;display:flex;justify-content:space-between;gap:14px;align-items:center}
 .bulk-issued p{margin:5px 0;max-width:600px;line-height:1.45}
 @media(max-width:700px){.bulk-issued{align-items:flex-start;flex-direction:column}.bulk-issued .actions{flex-wrap:wrap}}
+
+/* v2.5.2: permanent TEST vs OFFICIAL election classification. */
+.election-mode-option{margin:14px 0;padding:14px;border:2px solid #a4cfc3;border-radius:12px;background:#eef9f4}
+.election-mode-option label{display:flex;gap:10px;align-items:flex-start;font-weight:700}
+.election-mode-option input{width:19px;height:19px;flex:none;margin:1px 0 0;accent-color:#0e766e}
+.election-mode-option small{display:block;margin:7px 0 0 29px;line-height:1.5;color:#425b5d}
+.election-type-label{display:inline-block;margin-left:8px;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:800;letter-spacing:.3px}
+.election-type-label.test{background:#fff0ca;color:#7d4b00;border:1px solid #f1cf71}
+.election-type-label.official{background:#e5f6eb;color:#16613b;border:1px solid #a8d6b6}

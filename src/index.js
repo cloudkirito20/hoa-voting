@@ -78,7 +78,7 @@ function validateTimeframe(body) {
 function db(env) {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.1" } }
+    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.2" } }
   });
 }
 
@@ -382,39 +382,47 @@ async function createElection(request, env, admin) {
   const body = await readJson(request);
   const title = clean(body?.title, 120);
   const description = clean(body?.description, 500);
+  if (body?.isTest !== undefined && typeof body.isTest !== "boolean")
+    return json({ error: "Election type must be Test or Official." }, 400);
+  const isTest = body?.isTest === true;
   if (!title) return json({ error: "Election title is required." }, 400);
   const schedule = validateTimeframe(body);
   if (schedule.error) return json({ error: schedule.error }, 400);
-  const { data, error } = await sb.from("elections").insert({ title, description: description || null, created_by: admin.id, ...schedule }).select("id").single();
+  const { data, error } = await sb.from("elections").insert({ title, description: description || null, created_by: admin.id, is_test: isTest, ...schedule }).select("id").single();
   assertDb(error);
-  await audit(env, admin.id, "election.create", "election", data.id, { title, ...schedule });
-  return json({ ok: true, id: data.id }, 201);
+  await audit(env, admin.id, "election.create", "election", data.id, { title, isTest, ...schedule });
+  return json({ ok: true, id: data.id, isTest }, 201);
 }
 
 async function deleteElection(request, env, admin, electionId) {
   const sb = db(env);
   const body = await readJson(request);
   const confirmTitle = String(body?.confirmTitle || "").trim();
-  const { data: election, error } = await sb.from("elections").select("id,title,status").eq("id", electionId).maybeSingle();
+  const { data: election, error } = await sb.from("elections")
+    .select("id,title,status,is_test").eq("id", electionId).maybeSingle();
   assertDb(error);
   if (!election) return json({ error: "Election not found." }, 404);
-  if (!confirmTitle || confirmTitle !== election.title) return json({ error: "Type the exact election title to confirm permanent deletion." }, 400);
+  if (!election.is_test) return json({ error: "Official elections cannot be deleted. The Test election checkbox must be selected when creating an election." }, 409);
+  if (election.status === "open") return json({ error: "Close the test election before deleting it." }, 409);
+  if (!confirmTitle || confirmTitle !== election.title || body?.confirmPhrase !== "DELETE TEST")
+    return json({ error: "Confirm the exact test election title and type DELETE TEST." }, 400);
 
   const photoPaths = await electionCandidatePhotoPaths(sb, electionId);
-  const { data, error: deleteError } = await sb.rpc("hoa_delete_election", { p_election_id: electionId });
+  // The PostgreSQL RPC rechecks is_test, voting status and title under a row
+  // lock, performs a single atomic deletion and preserves an audit trail.
+  const { data, error: deleteError } = await sb.rpc("hoa_delete_test_election", {
+    p_election_id: electionId, p_admin_id: admin.id, p_confirm_title: confirmTitle
+  });
   if (deleteError) {
-    const msg = deleteError.message || "Unable to delete election.";
-    // V2.1 never deletes elections that have ballots/participation. An older
-    // database may not have the required protection: do not recommend its
-    // retired, destructive test-election deletion migration.
-    if (/submitted ballots cannot be deleted|preserve the election records/i.test(msg)) return json({ error: msg }, 409);
-    if (/open election cannot be deleted|close voting first|positions are locked once voting opens|candidates are locked once voting opens/i.test(msg)) {
-      return json({ error: "Supabase needs the v2.1 integrity upgrade. Back up and run supabase/upgrade-bulk-voters-and-integrity.sql in Supabase SQL Editor. Elections with submitted votes cannot be deleted." }, 409);
-    }
+    const msg = deleteError.message || "Unable to delete test election.";
+    if (/could not find the function|schema cache|PGRST202/i.test(msg))
+      return json({ error: "Install and verify the v2.5.2 test-election SQL migration before using the updated website." }, 409);
+    if (/official|test election|close|title|administrator|not found|confirmed/i.test(msg))
+      return json({ error: msg }, 409);
     assertDb(deleteError);
   }
   await removeCandidatePhotoObjects(sb, photoPaths);
-  return json({ ok: true, deleted: data || { id: election.id, title: election.title } });
+  return json({ ok: true, deleted: data });
 }
 
 async function getElection(env, electionId) {
@@ -1274,10 +1282,10 @@ async function dhsudFinalElectionReport(env, electionId) {
     .eq("election_id", electionId).order("display_order", { ascending: true });
   assertDb(roster.error);
   return json({
-    reportKind: "DHSUD-aligned ELECOM election report and tally (not a government-issued form)",
+    reportKind: election.is_test ? "PRACTICE ONLY - Mock election tally, not for filing" : "DHSUD-aligned ELECOM election report and tally (not a government-issued form)",
     sourceReference: "2024 Revised IRR of RA 9904, Section 101 (DHSUD Department Circular 2024-018)",
     associationName: "Casa Verde de Bañaderos",
-    election: { id: election.id, title: election.title, status: "closed",
+    election: { id: election.id, title: election.title, isTest: Boolean(election.is_test), status: "closed",
       votingStartsAt: election.voting_starts_at || null,
       votingEndsAt: election.voting_ends_at || null,
       openedAt: election.opened_at || null,
@@ -1295,13 +1303,13 @@ async function dhsudFinalElectionReport(env, electionId) {
     positions,
     committeeMembers: (roster.data || []).map(x => ({ fullName: x.full_name, role: x.committee_role })),
     exportGeneratedAt: new Date().toISOString(),
-    certificateState: "Uncertified system tabulation - requires ELECOM review, signatures and any notarization required by DHSUD."
+    certificateState: election.is_test ? "TEST ONLY - not a valid or certifiable election result." : "Uncertified system tabulation - requires ELECOM review, signatures and any notarization required by DHSUD."
   });
 }
 
 async function participationReport(env, electionId, url) {
   const sb = db(env);
-  const { data: election, error } = await sb.from("elections").select("id,title,status").eq("id", electionId).maybeSingle();
+  const { data: election, error } = await sb.from("elections").select("id,title,status,is_test").eq("id", electionId).maybeSingle();
   assertDb(error);
   if (!election) return json({ error: "Election not found." }, 404);
   const [{ data: voters, error: vError }, { data: parts, error: pError }] = await Promise.all([
@@ -1353,7 +1361,7 @@ async function audit(env, adminId, action, entityType, entityId, details) {
 function publicUser(u) {
   return { id: u.id, username: u.username, role: u.role, fullName: u.full_name, block: u.block, lot: u.lot, mustChangePassword: u.role === "voter" && Boolean(u.must_change_password) };
 }
-function publicElection(e) {   return { id: e.id, title: e.title, description: e.description, status: visibleElection(e).status,
+function publicElection(e) {   return { id: e.id, title: e.title, isTest: Boolean(e.is_test), description: e.description, status: visibleElection(e).status,
     openedAt: e.opened_at, votingStartsAt: e.voting_starts_at, votingEndsAt: e.voting_ends_at }; }
 function publicCandidate(c) {
   const { photo_path, ...rest } = c;
