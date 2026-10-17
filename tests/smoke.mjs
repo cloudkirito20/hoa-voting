@@ -49,4 +49,14 @@ assert.ok(passwords.every(s=>/[A-Z]/.test(s)&&/[a-z]/.test(s)&&/[2-9]/.test(s)))
 assert.ok(backend.includes('path === "/api/admin/voters/bulk"'));
 assert.ok(backend.includes('voterRegistrationLock(sb)'));
 
+// Admin setup uses separate forms and a deliberate clipboard paste action, rather
+// than exposing two password fields to browser autofill on the same screen.
+assert.ok(source.includes('id="setupDetailsForm"'));
+assert.ok(source.includes('id="setupTokenForm"'));
+assert.ok(source.includes('id="pasteSetupToken"'));
+assert.ok(source.includes('navigator.clipboard.readText()'));
+assert.ok(source.includes('setupToken===details.password'));
+assert.ok(source.includes('64 characters entered'));
+assert.ok(!source.includes('<form id="setupForm"'));
+
 console.log('PASS: CSV quoting, numeric unit normalization, 159 vouchers on 20 A4 sheets, HTML escaping, 12-character password strength, bulk route.');

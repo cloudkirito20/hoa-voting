@@ -34,17 +34,19 @@ async function api(path, options={}){
 }
 
 async function init(){
-  try{ const me=await api('/api/me'); state.user=me.user; state.csrfToken=me.csrfToken; routeHome(); }
-  catch{
-    const bs=await fetch('/api/bootstrap-status').then(r=>r.json()).catch(()=>({needsSetup:false}));
-    if(location.pathname==='/admin'){
-      if(bs.needsSetup) return renderSetup();
-      return renderLogin('admin');
-    }
-    // Public entry points always show the voter login. The admin portal is intentionally
-    // available only by navigating directly to /admin.
-    return renderLogin('voter');
+  // During first-time setup, check bootstrap status before /api/me. A 401 from
+  // /api/me is normal before login, but should not interrupt the setup flow.
+  if(location.pathname==='/admin'){
+    try{
+      const response=await fetch('/api/bootstrap-status',{credentials:'same-origin',cache:'no-store'});
+      if(response.ok){
+        const bootstrap=await response.json();
+        if(bootstrap.needsSetup) return renderSetup();
+      }
+    }catch{}
   }
+  try{ const me=await api('/api/me'); state.user=me.user; state.csrfToken=me.csrfToken; routeHome(); }
+  catch{ return renderLogin(location.pathname==='/admin'?'admin':'voter'); }
 }
 window.addEventListener('popstate',()=>init());
 window.addEventListener('beforeunload',e=>{if(state.bulkBusy||state.bulkCredentials?.length){e.preventDefault();e.returnValue='';}});
@@ -54,10 +56,94 @@ function routeHome(){
   state.user?.role==='admin'?renderAdmin():renderVoter();
 }
 
-function renderSetup(){
-  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>First-time admin setup</h1><p class="sub">Create the administrator account using the private SETUP_TOKEN configured in Cloudflare.</p><form id="setupForm"><div class="field"><label>Administrator full name</label><input name="fullName" required maxlength="100"></div><div class="field"><label>Admin username</label><input name="username" required minlength="4" maxlength="40" autocomplete="username"></div><div class="field"><label>Admin password</label><input name="password" type="password" required minlength="10" autocomplete="new-password"></div><div class="field"><label>Cloudflare setup token</label><input name="setupToken" type="password" required></div><button class="btn btn-primary btn-block">Create administrator</button></form></section></div>`;
+// The setup token is collected on a separate page so password managers are
+// much less likely to autofill the administrator password into that field.
+function renderSetup(prefill={}){
+  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>First-time admin setup</h1><p class="sub">Step 1 of 2: create your administrator login. The separate Cloudflare setup token is requested on the next screen.</p><form id="setupDetailsForm" autocomplete="off"><div class="field"><label for="adminFullName">Administrator full name</label><input id="adminFullName" name="fullName" required maxlength="100" autocomplete="name"></div><div class="field"><label for="adminUsername">Admin username</label><input id="adminUsername" name="username" required minlength="4" maxlength="40" autocomplete="username" autocapitalize="none"></div><div class="field"><label for="adminPassword">Admin password</label><input id="adminPassword" name="password" type="password" required minlength="10" autocomplete="new-password"></div><button class="btn btn-primary btn-block" type="submit">Continue to setup token</button></form></section></div>`;
   enhancePasswordToggles(app);
-  document.querySelector('#setupForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{await api('/api/setup',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});toast('Administrator created. Please sign in.');renderLogin('admin');}catch(err){toast(err.message,true)}};
+  const form=document.querySelector('#setupDetailsForm');
+  for(const name of ['fullName','username','password']){
+    const field=form.elements.namedItem(name);
+    if(field && prefill[name]) field.value=String(prefill[name]);
+  }
+  form.onsubmit=e=>{
+    e.preventDefault();
+    if(!form.reportValidity())return;
+    const f=new FormData(form);
+    renderSetupTokenStep({
+      fullName:String(f.get('fullName')||'').trim(),
+      username:String(f.get('username')||'').trim(),
+      password:String(f.get('password')||'')
+    });
+  };
+}
+function renderSetupTokenStep(details){
+  app.innerHTML=`<div class="auth-wrap"><section class="auth-card">${brandLogo('Secure election portal')}<h1>Verify administrator setup</h1><p class="sub">Step 2 of 2: paste your <strong>Cloudflare SETUP_TOKEN</strong>. This is NOT the administrator password.</p><p class="tiny muted" style="margin:0 0 18px">Administrator username: <strong>${esc(details.username)}</strong></p><form id="setupTokenForm" autocomplete="off"><div class="field"><label for="setupTokenEntry">Cloudflare setup token</label><input id="setupTokenEntry" name="setupToken" type="password" required maxlength="256" autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" aria-describedby="setupTokenStatus"><small id="setupTokenStatus" class="tiny muted" aria-live="polite">0 characters entered. The PowerShell token generated earlier has 64 characters.</small></div><button type="button" class="btn btn-secondary btn-block" id="pasteSetupToken" style="margin-bottom:10px">Paste setup token from clipboard</button><button class="btn btn-primary btn-block" id="finishSetup" type="submit">Create administrator</button><button class="btn btn-ghost btn-block" style="margin-top:10px" id="setupBack" type="button">Back to admin details</button></form><p id="setupTokenError" class="tiny muted" aria-live="polite" style="margin-top:14px"></p></section></div>`;
+  enhancePasswordToggles(app);
+  const form=document.querySelector('#setupTokenForm');
+  const input=document.querySelector('#setupTokenEntry');
+  const status=document.querySelector('#setupTokenStatus');
+  const errorBox=document.querySelector('#setupTokenError');
+  const submit=document.querySelector('#finishSetup');
+  const update=()=>{
+    const token=input.value.trim();
+    const isPassword=!!token && token===details.password;
+    const count=token.length;
+    if(isPassword){
+      status.textContent=`${count} characters. This matches your administrator password. Use the separate Cloudflare token.`;
+      status.style.color='#b42318';
+    }else if(count===64){
+      status.textContent='64 characters entered. Length verified; Cloudflare will verify the value.';
+      status.style.color='#067647';
+    }else{
+      status.textContent=`${count} characters entered. If you generated the PowerShell token, enter all 64 characters.`;
+      status.style.color='';
+    }
+    errorBox.textContent='';
+  };
+  input.value='';
+  input.addEventListener('input',update);
+  input.addEventListener('change',update);
+  document.querySelector('#pasteSetupToken').onclick=async()=>{
+    try{
+      if(!navigator.clipboard?.readText) throw new Error('clipboard unavailable');
+      const pasted=(await navigator.clipboard.readText()).trim();
+      if(!pasted){toast('Your clipboard is empty. Copy the token from PowerShell first.',true);return;}
+      input.value=pasted;
+      update();
+      input.focus({preventScroll:true});
+    }catch{
+      toast('Clipboard access was blocked. Click the token field and press Ctrl+V instead.',true);
+      input.focus({preventScroll:true});
+    }
+  };
+  document.querySelector('#setupBack').onclick=()=>renderSetup(details);
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const setupToken=input.value.trim();
+    if(!setupToken){toast('Enter your Cloudflare setup token.',true);return;}
+    if(setupToken===details.password){
+      update();
+      toast('The setup token must not be your administrator password.',true);
+      return;
+    }
+    submit.disabled=true;
+    submit.textContent='Verifying token…';
+    try{
+      await api('/api/setup',{method:'POST',body:JSON.stringify({...details,setupToken})});
+      toast('Administrator created. Please sign in.');
+      renderLogin('admin');
+    }catch(err){
+      if(err.message==='Invalid setup token.'){
+        errorBox.textContent='Cloudflare rejected the token. Check that the Production SETUP_TOKEN on the active hoa-voting Worker matches what you entered. No SQL changes are needed.';
+      }else{
+        errorBox.textContent=err.message;
+      }
+      toast(err.message,true);
+      submit.disabled=false;
+      submit.textContent='Create administrator';
+    }
+  };
 }
 function renderLogin(expectedRole=null){
   const admin=expectedRole==='admin';
