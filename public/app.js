@@ -320,7 +320,7 @@ function openDeleteElection(election){
 }
 
 async function renderVoters(){
-  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><section class="card bulk-card no-print"><div class="section-title"><div><h2>Bulk Registration + A4 Vouchers</h2><p class="muted tiny">Upload a CSV saved from Excel. Verify eligibility, preview unit duplicates, then issue accounts in batches of 20.</p></div><button class="btn btn-secondary btn-sm" id="bulkTemplate">Download CSV Template</button></div><div class="row bulk-uploader"><label class="field" style="margin:0;flex:1"><span class="tiny">Choose voter CSV (fullName, block, lot; optional approved, reviewNotes)</span><input id="bulkCsvFile" type="file" accept=".csv,text/csv"></label></div><div id="bulkIssued"></div><div id="bulkPreview"></div></section><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div class="row" style="margin:4px 0 12px"><button class="btn btn-secondary btn-sm" id="printSelectedVouchers">Reprint selected vouchers (no password change)</button><button class="btn btn-ghost btn-sm" id="printAllVouchers">Reprint all available</button></div><p class="tiny muted">Reprints retain existing temporary passwords. If the voter changed the password, their original voucher is invalid and cannot be reprinted. Pre-archive vouchers are not recoverable.</p><div id="voterTable">Loading…</div></div>`);
+  adminShell(`<div class="page-head"><div><h1>Voter Registration</h1><p>Create, manage, and remove voter accounts while preserving election history.</p></div><button class="btn btn-primary" id="addVoter">+ Register voter</button></div><section class="card bulk-card no-print"><div class="section-title"><div><h2>Bulk Registration + A4 Vouchers</h2><p class="muted tiny">Upload a CSV saved from Excel. Verify eligibility, preview unit duplicates, then issue accounts in batches of 20.</p></div><button class="btn btn-secondary btn-sm" id="bulkTemplate">Download CSV Template</button></div><div class="row bulk-uploader"><label class="field" style="margin:0;flex:1"><span class="tiny">Choose voter CSV (fullName, block, lot; optional approved, reviewNotes)</span><input id="bulkCsvFile" type="file" accept=".csv,text/csv"></label></div><div id="bulkIssued"></div><div id="bulkPreview"></div></section><div class="card"><div class="row" style="margin-bottom:12px"><input id="voterSearch" placeholder="Search name, username, block or lot" style="flex:1;min-width:220px;padding:11px;border:1px solid var(--line);border-radius:12px"><select id="voterElection" style="padding:11px;border:1px solid var(--line);border-radius:12px"><option value="">No election status</option></select></div><div class="row" style="margin:4px 0 12px"><button class="btn btn-secondary btn-sm" id="printSelectedVouchers">Reprint selected vouchers (no password change)</button><button class="btn btn-ghost btn-sm" id="printAllVouchers">Reprint all available</button><button class="btn btn-primary btn-sm" id="printAllQrSlips">Print ALL QR login slips</button></div><p class="tiny muted">QR login slips include name, Block/Lot, username and website QR for all ACTIVE voters; they never expose or change passwords. Original passwords created before the encrypted archive cannot be recovered.</p><div class="actions" style="margin:8px 0 10px"><button class="btn btn-secondary btn-sm" id="issueLegacyQrVouchers">Issue NEW credential vouchers for legacy accounts</button></div><p class="tiny muted">Only use replacement credentials when an existing voter needs a NEW temporary password. This explicitly resets the previous password, requires administrator reauthentication, and is blocked during open voting. Voters who have already changed their initial password are excluded.</p><div id="voterTable">Loading…</div></div>`);
   const addButton=document.querySelector('#addVoter');
   if(addButton)addButton.onclick=openAddVoter;
   document.querySelector('#bulkTemplate').onclick=()=>downloadCsv([['fullName','block','lot','approved','reviewNotes']], 'hoa-voter-import-template.csv');
@@ -356,6 +356,8 @@ async function loadVoters(){
     currentBox.querySelector('#selectAllVouchers')?.addEventListener('change',e=>currentBox.querySelectorAll('.voucher-pick:not(:disabled)').forEach(x=>x.checked=e.target.checked));
     if(document.querySelector('#printSelectedVouchers'))document.querySelector('#printSelectedVouchers').onclick=()=>reprintVoterSelection(false);
     if(document.querySelector('#printAllVouchers'))document.querySelector('#printAllVouchers').onclick=()=>reprintVoterSelection(true);
+    if(document.querySelector('#printAllQrSlips'))document.querySelector('#printAllQrSlips').onclick=printAllQrSlips;
+    if(document.querySelector('#issueLegacyQrVouchers'))document.querySelector('#issueLegacyQrVouchers').onclick=openLegacyReissue;
     currentBox.querySelectorAll('[data-reset]').forEach(b=>b.onclick=()=>resetPass(Number(b.dataset.reset)));
     currentBox.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleVoter(Number(b.dataset.toggle),Number(b.dataset.active)));
     currentBox.querySelectorAll('[data-delete-voter]').forEach(b=>{
@@ -560,7 +562,8 @@ function renderBulkIssued(){
   box.querySelector('#bulkDiscard').onclick=()=>{if(!confirm('Clear one-time plaintext passwords from this tab? Archived initial vouchers remain reprintable without changing passwords until voters change their own passwords.'))return;state.bulkCredentials=[];renderBulkIssued()};
 }
 const PUBLIC_VOTING_ADDRESS = 'https://hoa-voting.casa-verde-de-banaderos.workers.dev/';
-function printVoucherSheet(voters, existingWindow=null){
+function printVoucherSheet(voters, existingWindow=null, qrOnly=false){
+  if (!qrOnly && voters.some(v => typeof v.password !== "string" || !v.password)) return toast("A credential voucher needs a valid temporary password. Print QR-only slips instead.",true);
   if(!voters?.length)return toast('No printable original vouchers are available.',true);
   const w=existingWindow || window.open('','_blank','width=980,height=820');
   if(!w)return toast('Allow popups to print vouchers.',true);
@@ -569,16 +572,86 @@ function printVoucherSheet(voters, existingWindow=null){
   const qr=location.origin+'/voting-qr.png';
   const sheets=[];
   for(let i=0;i<voters.length;i+=8){
-    const cards=voters.slice(i,i+8).map((v,j)=>`<article class="voucher"><header><b>CASA VERDE DE BAÑADEROS HOA</b><small>OFFICIAL ELECTION LOGIN VOUCHER • PRIVATE</small></header><h2>${esc(v.fullName)}</h2><div class="lot">Block ${esc(v.block||'-')} | Lot ${esc(v.lot||'-')}</div><div class="loginrow"><div class="cred"><label>USERNAME</label><div>${esc(v.username)}</div><label>INITIAL PASSWORD</label><div>${esc(v.password)}</div></div><img alt="Scan to open HOA voting website" class="qr" src="${esc(qr)}"></div><footer><div><strong>${esc(portal)}</strong></div><span>Scan QR to open voting site. Change your initial password at first login. Never share this voucher. One account = one vote per election.</span></footer><small class="num">Voucher ${i+j+1} of ${voters.length}</small></article>`).join('');
+    const cards=voters.slice(i,i+8).map((v,j)=>`<article class="voucher"><header><b>CASA VERDE DE BAÑADEROS HOA</b><small>${qrOnly?'QR LOGIN SLIP • NO PASSWORD INCLUDED':'OFFICIAL ELECTION LOGIN VOUCHER • PRIVATE'}</small></header><h2>${esc(v.fullName)}</h2><div class="lot">Block ${esc(v.block||'-')} | Lot ${esc(v.lot||'-')}</div><div class="loginrow"><div class="cred"><label>USERNAME</label><div>${esc(v.username)}</div><label>${qrOnly?'PASSWORD':'INITIAL PASSWORD'}</label><div class="${qrOnly?'no-password':''}">${qrOnly?'Use your existing password':esc(v.password)}</div></div><img alt="Scan to open HOA voting website" class="qr" src="${esc(qr)}"></div><footer><div><strong>${esc(portal)}</strong></div><span>${qrOnly?'Scan QR to open the voting site; it does not sign you in. If you do not know your password, contact the HOA administrator for a separately authorized replacement.':'Scan QR to open voting site. Change your initial password at first login. Never share this voucher. One account = one vote per election.'}</span></footer><small class="num">Voucher ${i+j+1} of ${voters.length}</small></article>`).join('');
     sheets.push(`<section class="sheet">${cards}</section>`);
   }
-  w.document.write(`<!doctype html><html lang="en"><head><meta charset="UTF-8"><title>HOA A4 Voter Vouchers</title><style>@page{size:A4 portrait;margin:9mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#182c2b}.sheet{width:192mm;height:279mm;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr));gap:2mm;break-after:page;page-break-after:always}.sheet:last-child{break-after:auto;page-break-after:auto}.voucher{position:relative;border:1px dashed #7c9190;border-radius:2mm;padding:3.2mm;display:flex;flex-direction:column;overflow:hidden;break-inside:avoid;page-break-inside:avoid}.voucher header{border-bottom:1px solid #bbd0ce;padding-bottom:1.5mm}.voucher header b{font-size:7.7pt;letter-spacing:.15px}.voucher header small{display:block;font-size:6pt;color:#486661;margin-top:1mm}.voucher h2{font-size:11pt;margin:2.2mm 0 1mm;line-height:1.12;overflow-wrap:anywhere}.lot{font-size:7.5pt;color:#42545a}.loginrow{display:flex;align-items:center;gap:1.5mm;margin:2mm 0}.cred{flex:1;min-width:0;display:grid;gap:0.5mm}.cred label{font-size:6.4pt;color:#4a6362;font-weight:700}.cred div{font-family:Consolas,monospace;font-weight:800;font-size:11pt;letter-spacing:.15px;overflow-wrap:anywhere}.qr{width:20mm;height:20mm;object-fit:contain;flex:none}.voucher footer{margin-top:auto;font-size:6.3pt;display:grid;gap:.8mm}.voucher footer strong{overflow-wrap:anywhere;font-size:6.2pt}.voucher footer span{color:#526967;line-height:1.16}.num{display:block;text-align:right;margin-top:1mm;color:#667b7c;font-size:6pt}@media screen{body{background:#e8eeee;padding:10px}.sheet{background:white;margin:0 auto 12px;box-shadow:0 5px 20px #888}}@media print{body{padding:0}.sheet{box-shadow:none}}</style></head><body>${sheets.join('')}</body></html>`);
+  w.document.write(`<!doctype html><html lang="en"><head><meta charset="UTF-8"><title>${qrOnly?'HOA A4 QR Login Slips':'HOA A4 Voter Vouchers'}</title><style>@page{size:A4 portrait;margin:9mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#182c2b}.sheet{width:192mm;height:279mm;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr));gap:2mm;break-after:page;page-break-after:always}.sheet:last-child{break-after:auto;page-break-after:auto}.voucher{position:relative;border:1px dashed #7c9190;border-radius:2mm;padding:3.2mm;display:flex;flex-direction:column;overflow:hidden;break-inside:avoid;page-break-inside:avoid}.voucher header{border-bottom:1px solid #bbd0ce;padding-bottom:1.5mm}.voucher header b{font-size:7.7pt;letter-spacing:.15px}.voucher header small{display:block;font-size:6pt;color:#486661;margin-top:1mm}.voucher h2{font-size:11pt;margin:2.2mm 0 1mm;line-height:1.12;overflow-wrap:anywhere}.lot{font-size:7.5pt;color:#42545a}.loginrow{display:flex;align-items:center;gap:1.5mm;margin:2mm 0}.cred{flex:1;min-width:0;display:grid;gap:0.5mm}.cred label{font-size:6.4pt;color:#4a6362;font-weight:700}.cred div{font-family:Consolas,monospace;font-weight:800;font-size:11pt;letter-spacing:.15px;overflow-wrap:anywhere}.cred div.no-password{font-family:Arial,sans-serif;font-weight:500;font-size:8pt}.qr{width:20mm;height:20mm;object-fit:contain;flex:none}.voucher footer{margin-top:auto;font-size:6.3pt;display:grid;gap:.8mm}.voucher footer strong{overflow-wrap:anywhere;font-size:6.2pt}.voucher footer span{color:#526967;line-height:1.16}.num{display:block;text-align:right;margin-top:1mm;color:#667b7c;font-size:6pt}@media screen{body{background:#e8eeee;padding:10px}.sheet{background:white;margin:0 auto 12px;box-shadow:0 5px 20px #888}}@media print{body{padding:0}.sheet{box-shadow:none}}</style></head><body>${sheets.join('')}</body></html>`);
   w.document.close();
   // Wait briefly for the QR image to load; never print a missing/remote QR.
   const images=Array.from(w.document.images||[]);
-  Promise.all(images.map(im=>im.complete?Promise.resolve():new Promise(done=>{im.onload=done;im.onerror=done})))
-    .then(()=>{try{w.focus?.();w.print?.()}catch{}});
+  Promise.all(images.map(im=>im.complete?Promise.resolve(im.naturalWidth>0):new Promise(done=>{im.onload=()=>done(true);im.onerror=()=>done(false)})))
+    .then(loaded=>{
+      if(!loaded.every(Boolean)){
+        alert('The QR image did not load. Check that /voting-qr.png is deployed, then try printing again.');
+        return;
+      }
+      try{w.focus?.();w.print?.()}catch{}
+    });
 }
+async function printAllQrSlips(){
+  // Open on the actual click, before fetching, to avoid popup blockers.
+  const w=window.open('','_blank','width=980,height=820');
+  if(!w)return toast('Please allow popups to print QR slips.',true);
+  try{
+    const d=await api('/api/admin/vouchers/qr-slips',{method:'POST',body:'{}'});
+    if(!d.voters?.length){w.close();return toast('No active voter accounts were found.',true)}
+    printVoucherSheet(d.voters,w,true);
+    toast(`Printing QR slips for ${d.voters.length} active voters. No passwords changed.`);
+  }catch(err){w.close();toast(err.message,true)}
+}
+
+async function openLegacyReissue(){
+  if(state.bulkBusy){toast('Another credential operation is still running.',true);return}
+  if(state.bulkCredentials.length){
+    alert('Please print and clear the credentials already issued in this tab before starting another operation.');
+    return;
+  }
+  let eligible=[];
+  try{
+    const d=await api('/api/admin/voters');
+    eligible=(d.voters||[]).filter(v=>v.active && v.must_change_password && !v.voucherAvailable);
+  }catch(err){toast(err.message,true);return}
+  if(!eligible.length)return toast('No eligible legacy accounts need fresh initial vouchers. Use Reprint Available or Print ALL QR Slips.');
+  modal(`<h2>Issue replacement QR credential vouchers</h2><div class="danger-note"><strong>This is NOT a reprint.</strong><p>You are about to replace the existing passwords of <strong>${eligible.length}</strong> legacy voter accounts with NEW random temporary passwords.</p><p>Old credentials and active sessions will stop working. Existing usernames, registered properties and voting records will remain unchanged. Voters who have changed their personal password are excluded.</p><p>Do not proceed during an election or unless you can securely distribute the replacement vouchers.</p></div><div class="field"><label>Your administrator password</label><input id="reissueAdminPassword" type="password" autocomplete="current-password" maxlength="256" required></div><div class="field"><label>Type REISSUE to confirm the password changes</label><input id="reissueConfirm" autocomplete="off" spellcheck="false" required></div><div id="reissueProgress" class="tiny muted">${eligible.length} eligible legacy accounts · 20 per transaction</div><button class="btn btn-danger btn-block" id="confirmLegacyReissue">Issue NEW passwords and A4 QR vouchers</button>`,()=>{
+    enhancePasswordToggles(document.querySelector('#modalBackdrop'));
+    const button=document.querySelector('#confirmLegacyReissue');
+    button.onclick=async()=>{
+      const adminPassword=document.querySelector('#reissueAdminPassword').value;
+      const confirmation=document.querySelector('#reissueConfirm').value;
+      if(!adminPassword || confirmation!=='REISSUE')return toast('Enter your admin password and type REISSUE exactly.',true);
+      if(!confirm(`Replace the passwords of ${eligible.length} legacy voters? Previous passwords will stop working. This cannot be undone.`))return;
+      button.disabled=true;
+      const progress=document.querySelector('#reissueProgress');
+      // Open now; password-issuing requests can take multiple seconds.
+      const popup=window.open('','_blank','width=980,height=820');
+      state.bulkBusy=true;
+      let issued=0;
+      try{
+        for(let i=0;i<eligible.length;i+=20){
+          const ids=eligible.slice(i,i+20).map(v=>Number(v.id));
+          progress.textContent=`Issuing replacements: ${issued} of ${eligible.length} completed…`;
+          const d=await api('/api/admin/vouchers/reissue-legacy',{method:'POST',body:JSON.stringify({voterIds:ids,adminPassword,confirm:'REISSUE'})});
+          state.bulkCredentials.push(...d.voters);
+          issued+=d.voters.length;
+        }
+        document.querySelector('#reissueAdminPassword').value='';
+        closeModal();
+        renderBulkIssued();
+        if(popup)printVoucherSheet(state.bulkCredentials,popup);
+        else alert('Popups are blocked. Use the Print A4 vouchers button under Bulk Registration; the issued credentials are still in this tab.');
+        toast(`${issued} new QR credential vouchers ready to print.`);
+        await loadVoters();
+      }catch(err){
+        popup?.close();
+        progress.textContent=`Stopped: ${issued} account(s) were successfully reissued. Print them from the Bulk Registration area.`;
+        alert(`Credential reissue stopped after ${issued} successful account(s). Do not retry blindly: completed credentials are saved in this tab and encrypted in Supabase for unchanged reprint. Print the successful vouchers, refresh the voter list, and resolve the error.\n\n${err.message}`);
+        renderBulkIssued();
+        await loadVoters();
+      }finally{state.bulkBusy=false;button.disabled=false}
+    };
+  });
+}
+
 async function reprintVoterSelection(all){
   const ids=Array.from(document.querySelectorAll('#voterTable .voucher-pick:checked:not(:disabled)'))
     .map(x=>Number(x.value));

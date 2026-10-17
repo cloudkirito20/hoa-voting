@@ -34,6 +34,16 @@ assert.ok(popupHtml.includes('/voting-qr.png'));
 assert.ok(popupHtml.includes('INITIAL PASSWORD'));
 assert.ok(popupHtml.includes('Change your initial password at first login'));
 
+ctx.qrVoters=vouchers.map(({password,...v})=>v);
+check('printVoucherSheet(qrVoters,null,true)');
+assert.equal((popupHtml.match(/class="voucher"/g)||[]).length,159);
+assert.equal((popupHtml.match(/class="sheet"/g)||[]).length,20);
+assert.ok(popupHtml.includes('QR LOGIN SLIP • NO PASSWORD INCLUDED'));
+assert.ok(popupHtml.includes('Use your existing password'));
+assert.ok(popupHtml.includes('/voting-qr.png'));
+assert.ok(!popupHtml.includes('NOT-A-REAL-PASSWORD'));
+
+
 ctx.vouchers=[{...vouchers[0],fullName:'<script>alert(1)</script>'}];
 check('printVoucherSheet(vouchers)');
 assert.ok(popupHtml.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));

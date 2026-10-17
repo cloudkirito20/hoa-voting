@@ -1,6 +1,6 @@
 {
   "name": "hoa-voting-cloudflare-supabase",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "private": true,
   "type": "module",
   "description": "HOA officer voting system hosted on Cloudflare Workers with Supabase PostgreSQL",
@@ -8,7 +8,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "node --check src/index.js && node --check public/app.js",
-    "test": "node tests/smoke.mjs && node tests/security.mjs && node tests/deadline.mjs && node tests/voucher-archive.mjs"
+    "test": "node tests/smoke.mjs && node tests/security.mjs && node tests/deadline.mjs && node tests/voucher-archive.mjs && node tests/legacy-vouchers.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"

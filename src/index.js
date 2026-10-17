@@ -78,7 +78,7 @@ function validateTimeframe(body) {
 function db(env) {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.0" } }
+    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.1" } }
   });
 }
 
@@ -134,6 +134,8 @@ async function api(request, env, url) {
   if (path === "/api/admin/voters" && method === "POST") return createVoter(request, env, auth.user);
   if (path === "/api/admin/voters/bulk" && method === "POST") return bulkCreateVoters(request, env, auth.user);
   if (path === "/api/admin/vouchers/reprint" && method === "POST") return reprintVouchers(request, env, auth.user);
+  if (path === "/api/admin/vouchers/qr-slips" && method === "POST") return printQrSlips(env, auth.user);
+  if (path === "/api/admin/vouchers/reissue-legacy" && method === "POST") return reissueLegacyVouchers(request, env, auth.user);
   if (/^\/api\/admin\/voters\/\d+$/.test(path) && method === "DELETE") return deleteVoter(env, auth.user, Number(path.split("/").pop()));
   if (/^\/api\/admin\/voters\/\d+\/reset-password$/.test(path) && method === "POST") return resetVoterPassword(env, auth.user, Number(path.split("/")[4]));
   if (/^\/api\/admin\/voters\/\d+\/active$/.test(path) && method === "PUT") return toggleVoter(request, env, auth.user, Number(path.split("/")[4]));
@@ -718,25 +720,106 @@ async function verifyAdminReprintPassword(sb, admin, password) {
   assertDb(r.error);
   return (r.data || []).some(x => Number(x.id) === Number(admin.id) && x.role === "admin");
 }
-async function reprintVouchers(request, env, admin) {
-  // The Print/Reprint endpoint never generates or resets a password.
-  const body = await readJson(request);
-  const password = String(body?.adminPassword || "");
-  const sb = db(env);
-  const now = new Date().toISOString();
+// Reprint and legacy credential reissue share one per-admin/IP password-guess limit.
+// Both routes require an authenticated admin session AND CSRF validation above.
+async function voucherAdminAuthorization(request, sb, admin, password) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const rateName = `voucher-reprint:${admin.id}`;
   const rate = await sb.from("login_attempts").select("id", { count: "exact", head: true })
     .eq("ip", ip).eq("username", rateName)
     .gte("attempted_at", new Date(Date.now() - 15 * 60 * 1000).toISOString());
   assertDb(rate.error);
-  if (Number(rate.count || 0) >= 5) return json({ error: "Too many failed reprint authorizations. Try again in 15 minutes." }, 429);
+  if (Number(rate.count || 0) >= 5) return json({ error: "Too many failed voucher authorizations. Try again in 15 minutes." }, 429);
   if (!await verifyAdminReprintPassword(sb, admin, password)) {
-    const fail = await sb.from("login_attempts").insert({ ip, username: rateName, attempted_at: now });
+    const fail = await sb.from("login_attempts").insert({ ip, username: rateName, attempted_at: new Date().toISOString() });
     assertDb(fail.error);
-    return json({ error: "Re-enter your administrator password to reprint vouchers." }, 403);
+    return json({ error: "Re-enter your administrator password to authorize vouchers." }, 403);
   }
-  await sb.from("login_attempts").delete().eq("ip", ip).eq("username", rateName);
+  const clear = await sb.from("login_attempts").delete().eq("ip", ip).eq("username", rateName);
+  assertDb(clear.error);
+  return null;
+}
+
+// Name, username and the public website QR only. Never modify a credential.
+async function printQrSlips(env, admin) {
+  const sb = db(env);
+  const r = await sb.from("users").select("id,username,full_name,block,lot")
+    .eq("role", "voter").eq("active", true).order("id", { ascending: true }).limit(501);
+  assertDb(r.error);
+  if ((r.data || []).length > 500) return json({ error: "More than 500 active voters. Print in smaller batches." }, 400);
+  const voters = (r.data || []).map(x => ({ id: x.id, username: x.username,
+    fullName: x.full_name, block: x.block, lot: x.lot }));
+  const auditResult = await sb.from("audit_log").insert({ admin_user_id: admin.id,
+    action: "voter.qr_slips_print", entity_type: "voter", entity_id: "all",
+    details: { count: voters.length, voterIds: voters.map(x => x.id), passwordIncluded: false } });
+  assertDb(auditResult.error);
+  return json({ ok: true, voters, passwordsUnchanged: true, passwordIncluded: false });
+}
+
+// This is NOT a reprint. It is a distinct, explicitly confirmed admin operation.
+// Only active, pre-archive voter accounts STILL needing their first password
+// change can receive fresh credentials. Personalized passwords are protected.
+async function reissueLegacyVouchers(request, env, admin) {
+  const body = await readJson(request, 64 * 1024);
+  const ids = body?.voterIds;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > 20 ||
+      ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(ids).size !== ids.length || body?.confirm !== "REISSUE") {
+    return json({ error: "Select 1 to 20 distinct legacy voters and explicitly confirm REISSUE." }, 400);
+  }
+  const sb = db(env);
+  const authorized = await voucherAdminAuthorization(request, sb, admin, String(body?.adminPassword || ""));
+  if (authorized) return authorized;
+  const locked = await voterRegistrationLock(sb);
+  if (locked) return locked;
+  // Fail before any passwords are changed if the encryption key is missing.
+  voucherKeyBytes(env);
+  const { data: rows, error } = await sb.from("users")
+    .select("id,username,full_name,block,lot,active,must_change_password")
+    .eq("role", "voter").in("id", ids).order("id", { ascending: true });
+  assertDb(error);
+  if ((rows || []).length !== ids.length) return json({ error: "Some selected voter accounts no longer exist." }, 409);
+  if (rows.some(x => !x.active || !x.must_change_password))
+    return json({ error: "Only active voters who have not changed their initial password may receive legacy replacements." }, 409);
+  const archived = await sb.from("voter_vouchers").select("voter_id").in("voter_id", ids);
+  assertDb(archived.error);
+  if (archived.data?.length)
+    return json({ error: "Some accounts now have printable archived credentials. Reprint those unchanged instead." }, 409);
+  const credentials = [];
+  for (const voter of rows) {
+    const password = strongVoterPassword();
+    const archive = await archiveVoucher(env, voter.username, password);
+    credentials.push({ voterId: voter.id, username: voter.username,
+      fullName: voter.full_name, block: voter.block, lot: voter.lot,
+      password, ...archive });
+  }
+  // All-or-nothing within this batch; SQL rechecks eligibility under row locks,
+  // freezes changes during an open election and audits without plaintext secrets.
+  const result = await sb.rpc("hoa_reissue_legacy_vouchers", {
+    p_admin_id: admin.id,
+    p_voters: credentials.map(x => ({ voterId: x.voterId, password: x.password,
+      voucherNonce: x.voucherNonce, voucherCiphertext: x.voucherCiphertext }))
+  });
+  if (result.error) {
+    if (/could not find the function|schema cache|PGRST202/i.test(result.error.message || ""))
+      return json({ error: "Install supabase/v2.5.1-install-parts/01_bulk_legacy_voucher_reissue.sql and verify its permissions before using bulk replacements." }, 409);
+    if (/legacy|voter|election|archive|voucher|cannot|locked|open/i.test(result.error.message || ""))
+      return json({ error: "Replacement batch was not issued: " + result.error.message }, 409);
+    assertDb(result.error);
+  }
+  if (Number(result.data) !== credentials.length)
+    return json({ error: "Unexpected voucher issuance count. Verify the archived vouchers before retrying." }, 503);
+  return json({ ok: true, count: credentials.length, voters: credentials.map(({ voucherNonce, voucherCiphertext, voterId, ...safe }) => ({ id: voterId, ...safe })),
+    passwordsReplaced: true });
+}
+
+async function reprintVouchers(request, env, admin) {
+  // The Print/Reprint endpoint never generates or resets a password.
+  const body = await readJson(request);
+  const password = String(body?.adminPassword || "");
+  const sb = db(env);
+  const authorized = await voucherAdminAuthorization(request, sb, admin, password);
+  if (authorized) return authorized;
   const isAll = body?.all === true;
   const selected = body?.voterIds;
   if (!isAll && (!Array.isArray(selected) || !selected.length || selected.length > 500 ||

@@ -1,6 +1,6 @@
 # v2.5 Security, Elections, ELECOM and Voucher Reprinting (2026-10-17)
 
-**Start with `README_RELEASE_v2.5.0.md` before deploying.** This release requires
+**Start with `README_RELEASE_v2.5.1.md` before deploying.** This release requires
 new Supabase migrations (v2.2, v2.3, v2.4, v2.5 in order) and a separate,
 never-rotated (without re-encryption) Cloudflare `VOUCHER_ENCRYPTION_KEY` secret.
 
