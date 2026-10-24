@@ -1201,14 +1201,20 @@ async function buildElectionResults(env, electionId) {
   const { data: election, error } = await sb.from("elections").select("*").eq("id", electionId).maybeSingle();
   assertDb(error);
   if (!election) return null;
-  const [{ count: currentActive, error: eError }, { count: ballotsCast, error: tError }, { count: anonymousBallots, error: bError }, detail, votesR] = await Promise.all([
+  const [{ count: currentActive, error: eError }, { count: ballotsCast, error: tError }, { count: anonymousBallots, error: bError }, detail, votesR, integrityR] = await Promise.all([
     sb.from("users").select("id", { count: "exact", head: true }).eq("role", "voter").eq("active", true),
     sb.from("voter_participation").select("user_id", { count: "exact", head: true }).eq("election_id", electionId),
     sb.from("ballots").select("id", { count: "exact", head: true }).eq("election_id", electionId),
     getElectionData(env, electionId),
-    sb.rpc("hoa_candidate_vote_totals", { p_election_id: electionId })
+    sb.rpc("hoa_candidate_vote_totals", { p_election_id: electionId }),
+    sb.rpc("hoa_ballot_integrity_summary", { p_election_id: electionId })
   ]);
   assertDb(eError); assertDb(tError); assertDb(bError); assertDb(votesR.error);
+  // Before v2.5.4 is installed, report UNVERIFIED rather than falsely claiming
+  // ballot integrity. An unrelated database error is still a hard failure.
+  const migrationMissing = Boolean(integrityR.error &&
+    /PGRST202|could not find the function|schema cache/i.test(String(integrityR.error.message || "")));
+  if (integrityR.error && !migrationMissing) assertDb(integrityR.error);
   const voteCounts = new Map((votesR.data || []).map(x => [String(x.candidate_id), Number(x.votes || 0)]));
   for (const p of detail.positions) {
     let totalVotes = 0;
@@ -1218,7 +1224,12 @@ async function buildElectionResults(env, electionId) {
       return { ...c, votes };
     }).sort((a,b) => b.votes - a.votes || a.full_name.localeCompare(b.full_name));
     p.totalVotes = totalVotes;
-    p.candidates = candidates.map(c => ({ ...c, percentage: totalVotes ? Number(((c.votes / totalVotes) * 100).toFixed(1)) : 0 }));
+    p.candidates = candidates.map(c => ({ ...c,
+      // Share of selections is not the same as share of participating voters
+      // when a position has multiple seats.
+      percentage: totalVotes ? Number(((c.votes / totalVotes) * 100).toFixed(1)) : 0,
+      voterSupportPercentage: Number(ballotsCast || 0) ? Number(((c.votes / Number(ballotsCast)) * 100).toFixed(1)) : 0
+    }));
   }
   // A snapshot captured automatically by PostgreSQL at Draft -> Open is
   // preferable to counting active accounts after the election has finished.
@@ -1226,13 +1237,37 @@ async function buildElectionResults(env, electionId) {
   const eligibleVoters = atOpening ?? Number(currentActive || 0);
   const cast = Number(ballotsCast || 0);
   const ballotRows = Number(anonymousBallots || 0);
+  const fields = ["ballotRows", "committedBallots", "legacyBallots", "mismatchedBallots",
+    "expectedSelections", "actualSelections", "invalidVoteRows", "crossElectionVoteRows"];
+  const rawIntegrity = integrityR.data;
+  const integrityDetails = !migrationMissing && rawIntegrity && typeof rawIntegrity === "object" &&
+    fields.every(k => rawIntegrity[k] !== null && rawIntegrity[k] !== undefined &&
+      Number.isSafeInteger(Number(rawIntegrity[k])) && Number(rawIntegrity[k]) >= 0)
+    ? Object.fromEntries(fields.map(k => [k, Number(rawIntegrity[k])])) : null;
+  const reportedSelections = detail.positions.reduce((sum, p) => sum + p.totalVotes, 0);
+  // This is a three-state assessment (verified / mismatch / unverifiable).
+  // Counting participants and ballots alone cannot detect missing vote rows.
+  const integrityStatus = migrationMissing ? "migration_required"
+    : !integrityDetails ? "unverified"
+    : cast !== ballotRows || integrityDetails.ballotRows !== ballotRows ||
+      integrityDetails.mismatchedBallots > 0 || integrityDetails.invalidVoteRows > 0 ||
+      integrityDetails.crossElectionVoteRows > 0 ||
+      (integrityDetails.legacyBallots === 0 &&
+       integrityDetails.expectedSelections !== integrityDetails.actualSelections) ||
+      integrityDetails.actualSelections !== reportedSelections ||
+      integrityDetails.committedBallots + integrityDetails.legacyBallots !== ballotRows
+      ? "mismatch"
+    : integrityDetails.legacyBallots > 0 ? "legacy_unverifiable" : "verified";
   return {
     election: visibleElection(election),
     eligibleVoters,
     eligibilitySource: atOpening === null ? "current_active_unverified" : "captured_at_open",
     ballotsCast: cast,
     anonymousBallots: ballotRows,
-    ballotRecordCountMatches: cast === ballotRows,
+    ballotRecordCountMatches: cast === ballotRows, // Legacy count-only field; do NOT use for certification.
+    voteRecordIntegrityOk: integrityStatus === "verified",
+    integrityStatus,
+    integrityDetails,
     turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(1)) : 0,
     positions: detail.positions
   };
@@ -1297,7 +1332,9 @@ async function dhsudFinalElectionReport(env, electionId) {
     verifiedOpeningSnapshot: data.eligibilitySource === "captured_at_open",
     ballotsCast: data.ballotsCast,
     anonymousBallots: data.anonymousBallots,
-    voteRecordIntegrityOk: data.ballotRecordCountMatches,
+    voteRecordIntegrityOk: data.voteRecordIntegrityOk,
+    integrityStatus: data.integrityStatus,
+    integrityDetails: data.integrityDetails,
     turnoutPercentage: data.turnoutPercentage,
     hasUnresolvedSeatTies: positions.some(p => p.cutoffTie),
     positions,

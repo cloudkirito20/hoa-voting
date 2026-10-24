@@ -1,3 +1,5 @@
+> **v2.5.4 integrity fix:** New ballot submissions preserve anonymous expected candidate counts for each position; result reports check them against actual votes. Existing historical ballots remain **unverifiable**, not automatically re-certified. Apply the SQL migration in `supabase/v2.5.4-install-parts/` **before** deploying the Worker update. See `README_INTEGRATION_v2.5.4.md`.
+
 > **v2.5.3 UI refresh:** Simpler mobile-friendly admin and voter interfaces; no SQL changes or voting-security changes. See [UI refresh notes](README_UI_REFRESH_v2.5.3.md).
 
 > **v2.5.2 election modes:** The New election form now defaults to protected Official mode; check **Test election** for a clearly labeled practice election that administrators can delete (with its test votes) after closing. See [v2.5.2 release instructions](README_RELEASE_v2.5.2.md). Voucher-printing features from v2.5.1 are unchanged.

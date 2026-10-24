@@ -23,7 +23,7 @@ for (const phrase of [
   '.voter-table tr','.ballot-footer','prefers-reduced-motion',
   'max-width:600px','max-width:860px','@media print'
 ]) assert.ok(css.includes(phrase), `Missing UI style: ${phrase}`);
-assert.match(html,/app\.js\?v=2\.5\.3/);
-assert.match(html,/styles\.css\?v=2\.5\.3/);
+assert.match(html,/app\.js\?v=2\.5\.4/);
+assert.match(html,/styles\.css\?v=2\.5\.4/);
 assert.ok(worker.includes('hoa_delete_test_election')); // No server-side behavior removed.
 console.log('PASS UI: simplified admin navigation, mobile voter cards, accessible dialogs, election setup, voucher actions, ballot steps, versioned assets.');
