@@ -88,6 +88,8 @@ class MemoryDb {
  from(table){return new Query(this,table)}
  async rpc(name,args={}){
   const fail=msg=>({data:null,error:{message:msg}});
+  // No scheduled Draft elections in the randomized test fixture.
+  if(name==='hoa_open_scheduled_elections')return {data:0,error:null};
   if(name==='hoa_verify_login'){
    const u=this.users.find(u=>u.username.toLowerCase()===args.p_username.toLowerCase()&&u.password===args.p_password&&u.active);
    return {data:u?[{...u}]:[],error:null};
@@ -160,6 +162,7 @@ class Query {
  constructor(db,table){this.db=db;this.table=table;this.filters=[];this.mode='select';this.head=false;this.countMode=false;this.orderings=[];this.limitN=null;this.dataToAdd=null;this.dataToUpdate=null;}
  select(_columns,opts={}){this.head=Boolean(opts.head);this.countMode=opts.count==='exact';return this}
  eq(k,v){this.filters.push(r=>String(r[k])===String(v));return this}
+ not(k,operator,v){if(operator==='is'&&v===null){this.filters.push(r=>r[k]!=null);return this}throw Error('Unexpected not operator')}
  neq(k,v){this.filters.push(r=>String(r[k])!==String(v));return this}
  gt(k,v){this.filters.push(r=>String(r[k])>String(v));return this}
  gte(k,v){this.filters.push(r=>String(r[k])>=String(v));return this}

@@ -30,16 +30,24 @@ export default {
     }
     return new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers });
   },
-  // Cron runs each minute. Votes are rejected at the exact database deadline
-  // regardless of whether the cron has executed yet.
+  // Cron runs each minute as a backup to the independent Supabase Cron job.
+  // The database's opening/closing triggers and vote cutoff remain authoritative.
   async scheduled(_controller, env) {
     requireConfig(env);
-    await closeExpiredElections(env);
+    await reconcileElectionSchedule(env);
   }
 };
 
 async function closeExpiredElections(env) {
   const { data, error } = await db(env).rpc("hoa_close_expired_elections");
+  assertDb(error);
+  return Number(data || 0);
+}
+
+// Supabase Cron opens scheduled Draft elections even if this Worker has no
+// traffic. On-demand reconciliation covers the seconds before the next tick.
+async function reconcileElectionSchedule(env) {
+  const { data, error } = await db(env).rpc("hoa_open_scheduled_elections");
   assertDb(error);
   return Number(data || 0);
 }
@@ -78,7 +86,7 @@ function validateTimeframe(body) {
 function db(env) {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.2" } }
+    global: { headers: { "X-Client-Info": "hoa-voting-cloudflare-worker/2.5.5" } }
   });
 }
 
@@ -348,6 +356,7 @@ async function authenticate(request, env) {
 }
 
 async function adminOverview(env) {
+  await reconcileElectionSchedule(env);
   const sb = db(env);
   const [votersR, electionsR, openR, participationR] = await Promise.all([
     sb.from("users").select("id", { count: "exact", head: true }).eq("role", "voter").eq("active", true),
@@ -365,6 +374,7 @@ async function adminOverview(env) {
 }
 
 async function listElections(env) {
+  await reconcileElectionSchedule(env);
   const sb = db(env);
   const [{ data: elections, error }, { data: positions, error: pError }, { data: ballots, error: bError }] = await Promise.all([
     sb.from("elections").select("*").order("id", { ascending: false }),
@@ -426,6 +436,7 @@ async function deleteElection(request, env, admin, electionId) {
 }
 
 async function getElection(env, electionId) {
+  await reconcileElectionSchedule(env);
   const sb = db(env);
   const [{ data: election, error }, { data: positions, error: pError }] = await Promise.all([
     sb.from("elections").select("*").eq("id", electionId).maybeSingle(),
@@ -1119,6 +1130,7 @@ async function toggleVoter(request, env, admin, voterId) {
 
 async function voterBallot(env, user) {
   if (user.role !== "voter") return json({ error: "Voter account required." }, 403);
+  await reconcileElectionSchedule(env);
   const sb = db(env);
   const { data: elections, error } = await sb.from("elections").select("*").eq("status", "open")
     .gt("voting_ends_at", new Date().toISOString())
@@ -1138,7 +1150,14 @@ async function voterBallot(env, user) {
       assertDb(eError);
       if (last) return json({ election: publicElection(visibleElection(last)), voted: true, votedAt: parts[0].voted_at, receiptCode: parts[0].receipt_code });
     }
-    return json({ election: null, message: "There is no election accepting ballots right now. Voting closes automatically at its published deadline." });
+    const { data: scheduled, error: sError } = await sb.from("elections")
+      .select("id,title,is_test,voting_starts_at,voting_ends_at")
+      .eq("status", "draft").not("voting_starts_at", "is", null)
+      .gt("voting_ends_at", new Date().toISOString())
+      .order("voting_starts_at", { ascending: true }).limit(1);
+    assertDb(sError);
+    return json({ election: null, upcomingElection: scheduled?.[0] || null,
+      message: "No election is accepting ballots right now. Scheduled elections open automatically at their published start time." });
   }
   const { data: participation, error: pError } = await sb.from("voter_participation").select("voted_at,receipt_code").eq("user_id", user.id).eq("election_id", election.id).maybeSingle();
   assertDb(pError);
@@ -1149,6 +1168,7 @@ async function voterBallot(env, user) {
 
 async function submitVote(request, env, user) {
   if (user.role !== "voter") return json({ error: "Voter account required." }, 403);
+  await reconcileElectionSchedule(env);
   const body = await readJson(request);
   const electionId = Number(body?.electionId);
   const selections = body?.selections;

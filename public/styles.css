@@ -391,3 +391,10 @@ button,input,textarea,select{font:inherit} button{cursor:pointer} a{color:inheri
   /* On narrow phones, the review action follows all candidates instead of covering them. */
   .ballot-footer {position:static;margin-top:14px;box-shadow:0 4px 16px rgba(19,69,56,.07)}
 }
+
+/* v2.5.5 - scheduled election status and no-photo profile silhouette */
+.badge-scheduled{background:#edf4ff;color:#2358a3}
+.badge-schedule-due{background:#fff0d9;color:#9a5c0a}
+.candidate-photo.candidate-no-photo{border-radius:50%;background:#e4e6eb;border-color:#d8dadd}
+.candidate-photo .candidate-placeholder{object-fit:cover;background:#e4e6eb}
+.scheduled-voter-notice{margin-top:16px!important;padding:13px 16px;border-radius:12px;background:#eef7f4;color:#205849}

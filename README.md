@@ -1,3 +1,11 @@
+## v2.5.5 — Automatic scheduled start and no-photo candidate profiles
+
+**Official scheduled elections automatically open at their configured Philippine-time start**, without an administrator clicking Open Voting. Set a start time when creating or editing a Draft election; leave it blank only for legacy manual opening. The database Cron job (`hoa-voting-election-schedule`) runs every minute and is independent of the website being open. Cloudflare cron and voter-facing requests provide a fallback after the new Worker is deployed. Only ready elections with active voters, a future deadline, no conflicting Open election, and at least one candidate in every position can open. The original immutable opening snapshot, one-vote-per-voter checks, and closing deadline still apply.
+
+Candidates without pictures (or with failed photo loads) now display the gray circular no-photo silhouette supplied by the administrator. This asset is bundled with the site; no Supabase photo upload is needed.
+
+**Upgrade order:** see `README_RELEASE_v2.5.5.md` and apply `supabase/v2.5.5-install-parts/01_scheduled_auto_start.sql` before deploying v2.5.5 Worker and UI. Keep Production election schedules unchanged unless the HOA election committee approves changes. The existing official scheduled Draft election is included automatically. This release does not certify the whole site for an official election.
+
 > **v2.5.4 integrity fix:** New ballot submissions preserve anonymous expected candidate counts for each position; result reports check them against actual votes. Existing historical ballots remain **unverifiable**, not automatically re-certified. Apply the SQL migration in `supabase/v2.5.4-install-parts/` **before** deploying the Worker update. See `README_INTEGRATION_v2.5.4.md`.
 
 > **v2.5.3 UI refresh:** Simpler mobile-friendly admin and voter interfaces; no SQL changes or voting-security changes. See [UI refresh notes](README_UI_REFRESH_v2.5.3.md).
