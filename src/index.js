@@ -1214,6 +1214,53 @@ async function submitVote(request, env, user) {
   return json({ ok: true, receiptCode: data || receiptCode });
 }
 
+// Shared by /results and /dhsud-final. The database RPC provides exact-choice
+// counts from the private append-only ledger; never trust client-side totals.
+const INTEGRITY_NUMERIC_FIELDS = Object.freeze([
+  "ballotRows", "committedBallots", "legacyBallots", "mismatchedBallots",
+  "expectedSelections", "actualSelections", "invalidVoteRows",
+  "crossElectionVoteRows", "choiceLedgerRows", "baselineChoiceRows",
+  "capturedAtVoteRows", "choiceMismatchRows", "choiceMismatchBallots"
+]);
+
+function assessElectionIntegrity({ rawIntegrity, migrationMissing, cast, ballotRows, reportedSelections }) {
+  if (migrationMissing) return { integrityDetails: null, integrityStatus: "migration_required" };
+  if (!rawIntegrity || typeof rawIntegrity !== "object" || Array.isArray(rawIntegrity)) {
+    return { integrityDetails: null, integrityStatus: "unverified" };
+  }
+  // PostgreSQL bigint fields may arrive as decimal strings. Accept only
+  // nonnegative safe integers, never booleans, null, fractional or missing values.
+  const fieldsValid = INTEGRITY_NUMERIC_FIELDS.every(key => {
+    const value = rawIntegrity[key];
+    if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0;
+    if (typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) {
+      return Number.isSafeInteger(Number(value));
+    }
+    return false;
+  });
+  if (!fieldsValid) return { integrityDetails: null, integrityStatus: "unverified" };
+  const integrityDetails = Object.fromEntries(INTEGRITY_NUMERIC_FIELDS.map(key => [key, Number(rawIntegrity[key])]));
+  const i = integrityDetails;
+  const inconsistent = !Number.isSafeInteger(cast) || !Number.isSafeInteger(ballotRows) ||
+    !Number.isSafeInteger(reportedSelections) || cast < 0 || ballotRows < 0 || reportedSelections < 0 ||
+    cast !== ballotRows || i.ballotRows !== ballotRows ||
+    i.committedBallots + i.legacyBallots !== i.ballotRows ||
+    i.actualSelections !== reportedSelections ||
+    i.choiceLedgerRows !== i.actualSelections ||
+    i.baselineChoiceRows + i.capturedAtVoteRows !== i.choiceLedgerRows ||
+    i.mismatchedBallots !== 0 || i.choiceMismatchRows !== 0 ||
+    i.choiceMismatchBallots !== 0 || i.invalidVoteRows !== 0 ||
+    i.crossElectionVoteRows !== 0 ||
+    (i.legacyBallots === 0 && i.expectedSelections !== i.actualSelections);
+  if (inconsistent) return { integrityDetails, integrityStatus: "mismatch" };
+  // A baseline created after historical votes were already stored cannot
+  // retrospectively certify their original candidate identities.
+  if (i.legacyBallots > 0 || i.baselineChoiceRows > 0) {
+    return { integrityDetails, integrityStatus: "legacy_unverifiable" };
+  }
+  return { integrityDetails, integrityStatus: "verified" };
+}
+
 // Final reports are built from server-owned election data. The browser sends
 // no vote totals and cannot override ranks or the election cutoff.
 async function buildElectionResults(env, electionId) {
@@ -1257,27 +1304,16 @@ async function buildElectionResults(env, electionId) {
   const eligibleVoters = atOpening ?? Number(currentActive || 0);
   const cast = Number(ballotsCast || 0);
   const ballotRows = Number(anonymousBallots || 0);
-  const fields = ["ballotRows", "committedBallots", "legacyBallots", "mismatchedBallots",
-    "expectedSelections", "actualSelections", "invalidVoteRows", "crossElectionVoteRows"];
-  const rawIntegrity = integrityR.data;
-  const integrityDetails = !migrationMissing && rawIntegrity && typeof rawIntegrity === "object" &&
-    fields.every(k => rawIntegrity[k] !== null && rawIntegrity[k] !== undefined &&
-      Number.isSafeInteger(Number(rawIntegrity[k])) && Number(rawIntegrity[k]) >= 0)
-    ? Object.fromEntries(fields.map(k => [k, Number(rawIntegrity[k])])) : null;
   const reportedSelections = detail.positions.reduce((sum, p) => sum + p.totalVotes, 0);
-  // This is a three-state assessment (verified / mismatch / unverifiable).
-  // Counting participants and ballots alone cannot detect missing vote rows.
-  const integrityStatus = migrationMissing ? "migration_required"
-    : !integrityDetails ? "unverified"
-    : cast !== ballotRows || integrityDetails.ballotRows !== ballotRows ||
-      integrityDetails.mismatchedBallots > 0 || integrityDetails.invalidVoteRows > 0 ||
-      integrityDetails.crossElectionVoteRows > 0 ||
-      (integrityDetails.legacyBallots === 0 &&
-       integrityDetails.expectedSelections !== integrityDetails.actualSelections) ||
-      integrityDetails.actualSelections !== reportedSelections ||
-      integrityDetails.committedBallots + integrityDetails.legacyBallots !== ballotRows
-      ? "mismatch"
-    : integrityDetails.legacyBallots > 0 ? "legacy_unverifiable" : "verified";
+  // Never discard the exact-choice ledger fields: count-only checks were vulnerable
+  // to a same-count candidate substitution. Missing ledger evidence fails closed.
+  const { integrityDetails, integrityStatus } = assessElectionIntegrity({
+    rawIntegrity: integrityR.data,
+    migrationMissing,
+    cast,
+    ballotRows,
+    reportedSelections
+  });
   return {
     election: visibleElection(election),
     eligibleVoters,

@@ -75,7 +75,7 @@ class MemoryDb {
   this.users=Array.from({length:N},(_,i)=>({id:i+1,username:`SYN-${String(i+1).padStart(3,'0')}`,password:PASSWORD,role:'voter',full_name:`Synthetic Voter ${i+1}`,active:true,must_change_password:false,block:'1',lot:String(i+1)}));
   this.users.push({id:900,username:'AUDIT-ADMIN',password:'AuditAdminPass',role:'admin',full_name:'Audit Admin',active:true,must_change_password:false});
   this.sessions=[];this.login_attempts=[];this.audit_log=[];this.election_committee_members=[];
-  this.voter_participation=[];this.ballots=[];this.ballot_votes=[];
+  this.voter_participation=[];this.ballots=[];this.ballot_votes=[];this.choice_ledger=[];
   this.missingMigration=false;this.failAfterCommitFor=null;
   this.setElection(EID,'open',after);
  }
@@ -83,7 +83,7 @@ class MemoryDb {
   this.elections=[{id,title:'RANDOMIZED 7-SEAT BOARD MEMBER - TEST ONLY',description:'Synthetic preferences',is_test:true,status,voting_ends_at:deadline,voting_starts_at:null,opened_at:new Date(clockNow-3000).toISOString(),eligible_voters_at_open:N}];
   this.positions=[{id:PID,election_id:id,title:'Board Member',seats:SEATS,sort_order:0}];
   this.candidates=candidateIds.map((id,k)=>({id,position_id:PID,full_name:names[k],statement:'',sort_order:k,photo_path:null}));
-  this.voter_participation=[];this.ballots=[];this.ballot_votes=[];this.failAfterCommitFor=null;
+  this.voter_participation=[];this.ballots=[];this.ballot_votes=[];this.choice_ledger=[];this.failAfterCommitFor=null;
  }
  from(table){return new Query(this,table)}
  async rpc(name,args={}){
@@ -102,6 +102,7 @@ class MemoryDb {
    if(this.missingMigration)return fail('Could not find the function public.hoa_ballot_integrity_summary in the schema cache (PGRST202)');
    const electionBallots=this.ballots.filter(b=>b.election_id===args.p_election_id);
    let mismatched=0,legacy=0,expected=0,actual=0,invalid=0,cross=0;
+   const mismatchBallotIds=new Set();
    for(const b of electionBallots){
     const rows=this.ballot_votes.filter(v=>v.ballot_id===b.id);
     const actualPositions={};
@@ -115,15 +116,29 @@ class MemoryDb {
     if(b.expected_position_counts==null)legacy++;
     else{
       expected+=Object.values(b.expected_position_counts).reduce((a,c)=>a+c,0);
-      if(JSON.stringify(Object.entries(b.expected_position_counts).sort())!==JSON.stringify(Object.entries(actualPositions).sort()))mismatched++;
+      if(JSON.stringify(Object.entries(b.expected_position_counts).sort())!==JSON.stringify(Object.entries(actualPositions).sort())){
+        mismatched++; mismatchBallotIds.add(b.id);
+      }
     }
    }
    for(const v of this.ballot_votes.filter(v=>v.election_id===args.p_election_id)){
      if(this.ballots.find(b=>b.id===v.ballot_id)?.election_id!==args.p_election_id)cross++;
    }
+   const voteRows=this.ballot_votes.filter(v=>v.election_id===args.p_election_id);
+   const ledgerRows=this.choice_ledger.filter(v=>v.election_id===args.p_election_id);
+   const identity=v=>[v.ballot_id,v.election_id,v.position_id,v.candidate_id].join('|');
+   const voteKeys=new Set(voteRows.map(identity));
+   const ledgerKeys=new Set(ledgerRows.map(identity));
+   const missingVotes=voteRows.filter(v=>!ledgerKeys.has(identity(v)));
+   const missingLedger=ledgerRows.filter(v=>!voteKeys.has(identity(v)));
+   const choiceMismatched=new Set([...missingVotes,...missingLedger].map(v=>v.ballot_id));
+   for(const id of choiceMismatched)mismatchBallotIds.add(id);
    return {data:{ballotRows:electionBallots.length,committedBallots:electionBallots.length-legacy,
-     legacyBallots:legacy,mismatchedBallots:mismatched,expectedSelections:expected,actualSelections:actual,
-     invalidVoteRows:invalid,crossElectionVoteRows:cross},error:null};
+     legacyBallots:legacy,mismatchedBallots:mismatchBallotIds.size,expectedSelections:expected,actualSelections:actual,
+     invalidVoteRows:invalid,crossElectionVoteRows:cross,
+     choiceLedgerRows:ledgerRows.length,baselineChoiceRows:ledgerRows.filter(v=>v.provenance==='baseline').length,
+     capturedAtVoteRows:ledgerRows.filter(v=>v.provenance==='cast').length,
+     choiceMismatchRows:missingVotes.length+missingLedger.length,choiceMismatchBallots:choiceMismatched.size},error:null};
   }
   if(name!=='hoa_submit_ballot')throw Error('Unexpected RPC: '+name);
   const user=this.users.find(u=>u.id===args.p_user_id);
@@ -154,6 +169,7 @@ class MemoryDb {
   this.voter_participation.push({user_id:user.id,election_id:election.id,receipt_code:args.p_receipt_code,voted_at:new Date().toISOString()});
   this.ballots.push({id:args.p_ballot_id,election_id:election.id,expected_position_counts:commitment});
   this.ballot_votes.push(...changes);
+  this.choice_ledger.push(...changes.map(v=>({...v,provenance:'cast'})));
   if(this.failAfterCommitFor===user.id){this.failAfterCommitFor=null;return fail('Simulated dropped database response after successful commit.')}
   return {data:args.p_receipt_code,error:null};
  }
@@ -327,6 +343,22 @@ db.elections[0].status='closed';
 const corruptFinal=await call('/api/admin/elections/202/dhsud-final',{auth:admin});
 equal(corruptFinal.data.voteRecordIntegrityOk,false,'DHSUD output must warn on corruption');
 equal(corruptFinal.data.integrityStatus,'mismatch','Final mismatch status propagates');
+
+// A same-count candidate substitution is the exact defect the private ledger fixes.
+// In the in-memory emulator this represents a privileged bypass of immutable-row
+// guards: real staging tests verified the guards reject such modifications.
+db.setElection(206,'open',after);
+await Promise.all(voters.map((auth,i)=>vote(auth,dataset[i],206)));
+const sample=db.ballots.find(b=>b.expected_position_counts[PID]>1);
+const targetRow=db.ballot_votes.find(v=>v.ballot_id===sample.id);
+const alternate=candidateIds.find(id=>!db.ballot_votes.some(v=>v.ballot_id===sample.id&&v.candidate_id===id));
+truth(Boolean(alternate),'Another candidate is available for choice substitution');
+targetRow.candidate_id=alternate;
+const sameCountSwap=await call('/api/admin/elections/206/results',{auth:admin});
+status(sameCountSwap,200,'Same-count substitution report');
+equal(sameCountSwap.data.integrityStatus,'mismatch','Candidate substitution does not pass ledger check');
+equal(sameCountSwap.data.integrityDetails.choiceMismatchRows,2,'Candidate substitution creates two unmatched ledger choices');
+equal(sameCountSwap.data.integrityDetails.mismatchedBallots,1,'Candidate substitution affects one ballot');
 
 // Old ballots with no count commitments must NEVER be auto-certified.
 db.setElection(203,'open',after);
