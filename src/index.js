@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { resolveElectionEligibility } from "./election-eligibility.js";
 
 const enc = new TextEncoder();
 const SESSION_COOKIE = "hoa_session";
@@ -1254,7 +1255,6 @@ async function buildElectionResults(env, electionId) {
   // A snapshot captured automatically by PostgreSQL at Draft -> Open is
   // preferable to counting active accounts after the election has finished.
   const atOpening = Number.isInteger(election.eligible_voters_at_open) ? election.eligible_voters_at_open : null;
-  const eligibleVoters = atOpening ?? Number(currentActive || 0);
   const cast = Number(ballotsCast || 0);
   const ballotRows = Number(anonymousBallots || 0);
   const fields = ["ballotRows", "committedBallots", "legacyBallots", "mismatchedBallots",
@@ -1278,10 +1278,22 @@ async function buildElectionResults(env, electionId) {
       integrityDetails.committedBallots + integrityDetails.legacyBallots !== ballotRows
       ? "mismatch"
     : integrityDetails.legacyBallots > 0 ? "legacy_unverifiable" : "verified";
+  const correctionR = election.status === "closed" && !election.is_test
+    ? await sb.from("hoa_election_eligibility_corrections").select("*").eq("election_id", electionId).maybeSingle()
+    : { data: null, error: null };
+  assertDb(correctionR.error);
+  const eligibility = resolveElectionEligibility({
+    election, currentActive, correction: correctionR.data,
+    cast, ballotRows, selections: reportedSelections
+  });
+  const eligibleVoters = eligibility.eligibleVoters;
   return {
     election: visibleElection(election),
     eligibleVoters,
-    eligibilitySource: atOpening === null ? "current_active_unverified" : "captured_at_open",
+    eligibilitySource: eligibility.eligibilitySource,
+    openingRegisteredVoters: eligibility.openingRegisteredVoters,
+    excludedFromCertifiedRoll: eligibility.excludedFromCertifiedRoll,
+    eligibilityCorrectionRecordedAt: eligibility.eligibilityCorrectionRecordedAt,
     ballotsCast: cast,
     anonymousBallots: ballotRows,
     ballotRecordCountMatches: cast === ballotRows, // Legacy count-only field; do NOT use for certification.
@@ -1346,9 +1358,14 @@ async function dhsudFinalElectionReport(env, electionId) {
       openedAt: election.opened_at || null,
       closedAt: election.closed_at || election.voting_ends_at || null },
     eligibleVoters: data.eligibleVoters,
-    eligibleCountBasis: data.eligibilitySource === "captured_at_open"
-      ? "Active voter accounts at the time the polls opened; ELECOM must verify the certified qualified-voter list."
-      : "Active voter accounts at export only (legacy election lacks opening snapshot); ELECOM verification required.",
+    eligibleCountBasis: data.eligibilitySource === "reconciled_from_elecom_masterlist"
+      ? "ELECOM-certified qualified-voter masterlist: 118; excludes 39 post-election removed nonvoter accounts. The original 157 accounts captured at opening remain preserved."
+      : data.eligibilitySource === "captured_at_open"
+        ? "Active voter accounts at the time the polls opened; ELECOM must verify the certified qualified-voter list."
+        : "Active voter accounts at export only (legacy election lacks opening snapshot); ELECOM verification required.",
+    openingRegisteredVoters: data.openingRegisteredVoters,
+    excludedFromCertifiedRoll: data.excludedFromCertifiedRoll,
+    eligibilityCorrectionRecordedAt: data.eligibilityCorrectionRecordedAt,
     verifiedOpeningSnapshot: data.eligibilitySource === "captured_at_open",
     ballotsCast: data.ballotsCast,
     anonymousBallots: data.anonymousBallots,
