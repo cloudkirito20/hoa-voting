@@ -1282,8 +1282,13 @@ async function buildElectionResults(env, electionId) {
     ? await sb.from("hoa_election_eligibility_corrections").select("*").eq("election_id", electionId).maybeSingle()
     : { data: null, error: null };
   assertDb(correctionR.error);
+  const revisionsR = election.status === "closed" && !election.is_test
+    ? await sb.from("hoa_election_eligibility_revisions").select("*").eq("election_id", electionId)
+      .order("revision_id", { ascending: true })
+    : { data: [], error: null };
+  assertDb(revisionsR.error);
   const eligibility = resolveElectionEligibility({
-    election, currentActive, correction: correctionR.data,
+    election, currentActive, correction: correctionR.data, revisions: revisionsR.data || [],
     cast, ballotRows, selections: reportedSelections
   });
   const eligibleVoters = eligibility.eligibleVoters;
@@ -1294,13 +1299,17 @@ async function buildElectionResults(env, electionId) {
     openingRegisteredVoters: eligibility.openingRegisteredVoters,
     excludedFromCertifiedRoll: eligibility.excludedFromCertifiedRoll,
     eligibilityCorrectionRecordedAt: eligibility.eligibilityCorrectionRecordedAt,
+    eligibilityRevisionRecordedAt: eligibility.eligibilityRevisionRecordedAt,
+    eligibilityEvidenceStatus: eligibility.eligibilityEvidenceStatus,
+    supersededEligibleVoters: eligibility.supersededEligibleVoters,
+    restoredAccounts: eligibility.restoredAccounts,
     ballotsCast: cast,
     anonymousBallots: ballotRows,
     ballotRecordCountMatches: cast === ballotRows, // Legacy count-only field; do NOT use for certification.
     voteRecordIntegrityOk: integrityStatus === "verified",
     integrityStatus,
     integrityDetails,
-    turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(eligibility.eligibilitySource === "reconciled_from_elecom_masterlist" ? 2 : 1)) : 0,
+    turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(["reconciled_from_elecom_masterlist", "reconciled_from_elecom_revision"].includes(eligibility.eligibilitySource) ? 2 : 1)) : 0,
     positions: detail.positions
   };
 }
@@ -1358,7 +1367,9 @@ async function dhsudFinalElectionReport(env, electionId) {
       openedAt: election.opened_at || null,
       closedAt: election.closed_at || election.voting_ends_at || null },
     eligibleVoters: data.eligibleVoters,
-    eligibleCountBasis: data.eligibilitySource === "reconciled_from_elecom_masterlist"
+    eligibleCountBasis: data.eligibilitySource === "reconciled_from_elecom_revision"
+      ? `ELECOM eligibility revision: ${data.eligibleVoters} qualified voters, including ${data.restoredAccounts} reinstated after an earlier ${data.supersededEligibleVoters}-voter determination. Original opening registration was ${data.openingRegisteredVoters}. Evidence: ${data.eligibilityEvidenceStatus === "certified_secretary_treasurer" ? "secretary/treasurer certified" : "pending secretary and treasurer certified-roster verification"}; election ballots and candidate totals are unchanged.`
+      : data.eligibilitySource === "reconciled_from_elecom_masterlist"
       ? "ELECOM-certified qualified-voter masterlist: 118; excludes 39 post-election removed nonvoter accounts. The original 157 accounts captured at opening remain preserved."
       : data.eligibilitySource === "captured_at_open"
         ? "Active voter accounts at the time the polls opened; ELECOM must verify the certified qualified-voter list."
@@ -1366,6 +1377,10 @@ async function dhsudFinalElectionReport(env, electionId) {
     openingRegisteredVoters: data.openingRegisteredVoters,
     excludedFromCertifiedRoll: data.excludedFromCertifiedRoll,
     eligibilityCorrectionRecordedAt: data.eligibilityCorrectionRecordedAt,
+    eligibilityRevisionRecordedAt: data.eligibilityRevisionRecordedAt,
+    eligibilityEvidenceStatus: data.eligibilityEvidenceStatus,
+    supersededEligibleVoters: data.supersededEligibleVoters,
+    restoredAccounts: data.restoredAccounts,
     verifiedOpeningSnapshot: data.eligibilitySource === "captured_at_open",
     ballotsCast: data.ballotsCast,
     anonymousBallots: data.anonymousBallots,
