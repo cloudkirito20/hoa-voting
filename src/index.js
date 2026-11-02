@@ -1300,7 +1300,7 @@ async function buildElectionResults(env, electionId) {
     voteRecordIntegrityOk: integrityStatus === "verified",
     integrityStatus,
     integrityDetails,
-    turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(basis.eligibilitySource === "reconciled_from_elecom_masterlist" ? 2 : 1)) : 0,
+    turnoutPercentage: eligibleVoters ? Number(((cast / eligibleVoters) * 100).toFixed(eligibility.eligibilitySource === "reconciled_from_elecom_masterlist" ? 2 : 1)) : 0,
     positions: detail.positions
   };
 }
