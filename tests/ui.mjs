@@ -36,6 +36,8 @@ for (const phrase of [
   'participation-report-table',
   'Print Voters Attendance Record (A4)'
 ]) assert.ok(ui.includes(phrase), `Missing voter attendance print feature: ${phrase}`);
+assert.ok(ui.includes('<th>Date &amp; Time Voted (PHT)</th>')); 
+assert.ok(ui.includes('v.voted&&v.voted_at?esc(phDateTime(v.voted_at))')); 
 assert.ok(css.includes('.attendance-print-header .attendance-hoa-name'));
 assert.ok(css.includes('.participation-section-title {display:none!important}'));
 assert.match(ui,/function drawParticipation\(d\).*?\$\{participationPrintHead\(d\)\}/s);
