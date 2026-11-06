@@ -23,7 +23,22 @@ for (const phrase of [
   '.voter-table tr','.ballot-footer','prefers-reduced-motion',
   'max-width:600px','max-width:860px','@media print'
 ]) assert.ok(css.includes(phrase), `Missing UI style: ${phrase}`);
-assert.match(html,/app\.js\?v=2\.5\.5/);
-assert.match(html,/styles\.css\?v=2\.5\.5/);
+assert.match(html,/app\.js\?v=2\.5\.5-attendance1/);
+assert.match(html,/styles\.css\?v=2\.5\.5-attendance1/);
+// Attendance print shows the text-only letterhead only in participation reports.
+for (const phrase of [
+  'CASA VERDE DE BAÑADEROS HOA, INC.',
+  'Brgy. Bañadero, Calamba City, Laguna',
+  'DHSUD COI No. R4A - 2611',
+  'TIN No. 659-907-147-00000',
+  'Voters Attendance Record',
+  '${participationPrintHead(d)}',
+  'participation-report-table',
+  'Print Voters Attendance Record (A4)'
+]) assert.ok(ui.includes(phrase), `Missing voter attendance print feature: ${phrase}`);
+assert.ok(css.includes('.attendance-print-header .attendance-hoa-name'));
+assert.ok(css.includes('.participation-section-title {display:none!important}'));
+assert.match(ui,/function drawParticipation\(d\).*?\$\{participationPrintHead\(d\)\}/s);
+assert.ok(!ui.slice(ui.indexOf('function drawResults(d)'),ui.indexOf('function participationPrintHead(d)')).includes('participationPrintHead(d)'));
 assert.ok(worker.includes('hoa_delete_test_election')); // No server-side behavior removed.
 console.log('PASS UI: simplified admin navigation, mobile voter cards, accessible dialogs, election setup, voucher actions, ballot steps, versioned assets.');
