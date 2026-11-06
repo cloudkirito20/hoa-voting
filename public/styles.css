@@ -398,3 +398,46 @@ button,input,textarea,select{font:inherit} button{cursor:pointer} a{color:inheri
 .candidate-photo.candidate-no-photo{border-radius:50%;background:#e4e6eb;border-color:#d8dadd}
 .candidate-photo .candidate-placeholder{object-fit:cover;background:#e4e6eb}
 .scheduled-voter-notice{margin-top:16px!important;padding:13px 16px;border-radius:12px;background:#eef7f4;color:#205849}
+
+/* Text-only HOA letterhead for the voter participation printout. */
+@media print {
+  .attendance-print-header {
+    border:0;
+    padding:0;
+    margin:0 0 7mm;
+    text-align:center;
+    color:#000;
+    break-inside:avoid;
+    page-break-inside:avoid;
+  }
+  .attendance-print-header .attendance-hoa-name {
+    font-size:15pt;
+    font-weight:800;
+    line-height:1.25;
+  }
+  .attendance-print-header .attendance-hoa-address {
+    margin-top:1.5mm;
+    font-size:11pt;
+    font-weight:700;
+  }
+  .attendance-print-header .attendance-hoa-detail {
+    margin-top:1mm;
+    font-size:9pt;
+    font-weight:400;
+  }
+  .attendance-print-header h1 {
+    margin:6mm 0 1.5mm;
+    font-size:16pt;
+    line-height:1.25;
+    font-weight:800;
+  }
+  .attendance-print-header p {
+    margin:0;
+    font-size:8pt;
+    line-height:1.35;
+    color:#222;
+  }
+  .participation-section-title {display:none!important}
+  .participation-report-table thead {display:table-header-group}
+  .participation-report-table tr {break-inside:avoid;page-break-inside:avoid}
+}
